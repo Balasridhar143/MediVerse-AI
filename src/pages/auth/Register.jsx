@@ -75,7 +75,7 @@ export default function Register() {
         navigate('/hospital/dashboard');
       }
     } catch (err) {
-      setError('Registration failed. Please verify your details.');
+      setError(err.message || 'Registration failed. Please verify your details.');
     } finally {
       setLoading(false);
     }

@@ -43,7 +43,7 @@ export default function Login() {
         navigate('/patient/dashboard', { replace: true });
       }
     } catch (err) {
-      setError('Authentication failed. Please verify your credentials.');
+      setError(err.message || 'Authentication failed. Please verify your credentials.');
     } finally {
       setLoading(false);
     }

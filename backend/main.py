@@ -29,11 +29,14 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://0.0.0.0:3000",
+    "https://mediverse-ai-fawn.vercel.app",
+    "https://mediverse-ai-balasridhar143s-projects.vercel.app",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,11 +57,11 @@ def health_check():
         "version": "1.0.0",
         "timestamp": datetime.datetime.utcnow().isoformat(),
         "database": "SQLite Persistent (mediverse.db)",
-        "demonstration_credentials": [
-            {"role": "patient", "email": "patient@example.com", "password": "password123"},
-            {"role": "doctor", "email": "doctor@example.com", "password": "password123"},
-            {"role": "hospital_admin", "email": "admin@example.com", "password": "password123", "hospital": "City Care Multispeciality Hospital"},
-            {"role": "hospital_admin", "email": "admin2@example.com", "password": "password123", "hospital": "Metro General Healthcare"}
+        "demonstration_accounts": [
+            {"role": "patient", "email": "patient@example.com"},
+            {"role": "doctor", "email": "doctor@example.com"},
+            {"role": "hospital_admin", "email": "admin@example.com", "hospital": "City Care Multispeciality Hospital"},
+            {"role": "hospital_admin", "email": "admin2@example.com", "hospital": "Metro General Healthcare"}
         ]
     }
 

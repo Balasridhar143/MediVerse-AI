@@ -64,7 +64,7 @@ async def upload_medical_report(
             detail=f"Failed to securely store report: {str(e)}"
         )
 
-    # 3. Patient Resolution
+    # 3. Patient Resolution (Enforce user isolation)
     patient = None
     if current_user:
         patient = db.query(models.Patient).filter(models.Patient.user_id == current_user.id).first()
@@ -72,17 +72,16 @@ async def upload_medical_report(
             patient = db.query(models.Patient).filter(models.Patient.full_name == current_user.full_name).first()
 
     if not patient:
-        # Default or anonymous patient record
-        patient = db.query(models.Patient).first()
-        if not patient:
-            patient = models.Patient(
-                id=f"pat_{uuid.uuid4().hex[:8]}",
-                full_name=current_user.full_name if current_user else "Registered Patient",
-                phone="+91 98765 43210",
-                address="Central Health District"
-            )
-            db.add(patient)
-            db.flush()
+        # Create an isolated dedicated patient record rather than leaking to another user's profile
+        patient = models.Patient(
+            id=f"pat_{uuid.uuid4().hex[:8]}",
+            user_id=current_user.id if current_user else None,
+            full_name=current_user.full_name if current_user else "Anonymous Patient",
+            phone="+91 98765 43210",
+            address="Central Health District"
+        )
+        db.add(patient)
+        db.flush()
 
     # 4. Text Extraction (PDF vs Image)
     extracted_text = ""
