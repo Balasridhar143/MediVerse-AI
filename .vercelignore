@@ -1,0 +1,16 @@
+node_modules
+dist
+build
+.git
+backend/mediverse.db*
+backend/*.db*
+backend/*.sqlite*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/raw
+data/processed
+data/logs
+backend/uploads
