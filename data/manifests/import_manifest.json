@@ -1,0 +1,15 @@
+{
+  "started_at": "2026-10-28T06:51:10.089712+00:00",
+  "completed_at": "2026-10-28T06:51:39.929898+00:00",
+  "duration_seconds": 29.8,
+  "total_imported_records": 741548,
+  "category_counts": {
+    "hospitals": 51089,
+    "healthcare_facilities": 214446,
+    "professionals": 8151,
+    "medicines": 251320,
+    "public_health_indicators": 9502,
+    "laboratory_observations": 95246,
+    "medical_documents": 111794
+  }
+}

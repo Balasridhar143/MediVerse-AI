@@ -1,0 +1,150 @@
+{
+  "pipeline_run_timestamp": "2026-10-28T06:35:21.951112+00:00",
+  "total_sources_processed": 14,
+  "total_downloaded_bytes": 182116147,
+  "total_downloaded_mb": 173.68,
+  "downloads": [
+    {
+      "source_id": "nic_healthgis_facilities",
+      "name": "NIC HealthGIS Public Health Facilities (Government of India)",
+      "category": "hospitals",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\hospitals\\public_health_facilities_nic.geojson",
+      "downloaded_bytes": 49502037,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:32:52.741994+00:00"
+    },
+    {
+      "source_id": "karnataka_kgis_facilities",
+      "name": "Karnataka State KGIS Health Facilities (Government of Karnataka)",
+      "category": "healthcare_facilities",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\healthcare_facilities\\karnataka_health_facilities_kgis.geojson",
+      "downloaded_bytes": 4822816,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:32:54.184732+00:00"
+    },
+    {
+      "source_id": "hotosm_india_facilities",
+      "name": "OpenStreetMap / HOT India Nationwide Healthcare Infrastructure",
+      "category": "hospitals",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\hospitals\\hotosm_ind_health_facilities_osm_geojson.zip",
+      "downloaded_bytes": 9533784,
+      "extracted_files": [
+        "health_facilities.geojson",
+        "README.txt",
+        "config.yaml",
+        "metadata.json"
+      ],
+      "timestamp": "2026-10-28T06:33:15.489652+00:00"
+    },
+    {
+      "source_id": "indian_medicine_catalogue",
+      "name": "Indian Pharmaceutical Products & Formulations Database",
+      "category": "medicines",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\medicines\\indian_medicine_data.csv",
+      "downloaded_bytes": 31807827,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:33:24.923782+00:00"
+    },
+    {
+      "source_id": "who_india_health_indicators",
+      "name": "World Health Organization (WHO) India Health Indicators",
+      "category": "public_health",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\public_health\\health_indicators_ind.csv",
+      "downloaded_bytes": 9467211,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:33:48.780700+00:00"
+    },
+    {
+      "source_id": "world_bank_india_indicators",
+      "name": "World Bank India Demographic & Health Systems Indicators",
+      "category": "public_health",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\public_health\\world_bank_health_ind.csv",
+      "downloaded_bytes": 926474,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:33:53.126885+00:00"
+    },
+    {
+      "source_id": "dhs_subnational_india",
+      "name": "USAID / DHS India Subnational Health & Demographic Indicators",
+      "category": "public_health",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\public_health\\dhs-quickstats_subnational_ind.csv",
+      "downloaded_bytes": 845287,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:33:58.908520+00:00"
+    },
+    {
+      "source_id": "physionet_mimic_labevents",
+      "name": "PhysioNet MIMIC-IV Clinical Laboratory Measurements",
+      "category": "laboratory",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\laboratory\\labevents.csv.gz",
+      "downloaded_bytes": 1963979,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:34:52.759533+00:00"
+    },
+    {
+      "source_id": "physionet_mimic_d_labitems",
+      "name": "PhysioNet MIMIC-IV Clinical Laboratory Items Dictionary",
+      "category": "laboratory",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\laboratory\\d_labitems.csv.gz",
+      "downloaded_bytes": 13520,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:34:54.775414+00:00"
+    },
+    {
+      "source_id": "icd10_clinical_terminology",
+      "name": "ICD-10-CM Clinical Diagnosis & Pathology Terminology",
+      "category": "medical_documents",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\medical_documents\\icd10_reference_cm.parquet",
+      "downloaded_bytes": 2715065,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:34:58.185302+00:00"
+    },
+    {
+      "source_id": "chatdoctor_medical_qa",
+      "name": "HealthcareMagic Clinical Decision & Medical Knowledge QA",
+      "category": "medical_documents",
+      "status": "SUCCESS",
+      "file_path": "C:\\Users\\balas\\OneDrive\\Desktop\\SEM PROJECT\\data\\raw\\medical_documents\\chatdoctor_healthcaremagic.parquet",
+      "downloaded_bytes": 70518147,
+      "extracted_files": [],
+      "timestamp": "2026-10-28T06:35:21.950959+00:00"
+    },
+    {
+      "source_id": "nmr_nmc_doctor_register",
+      "name": "National Medical Register (NMC)",
+      "category": "professionals",
+      "status": "RESTRICTED",
+      "notes": "National registry of verified doctors under the National Medical Commission. Unrestricted automated bulk programmatic extraction is rate-limited and prohibited by Terms of Service. Authorized institutional import API workflow provided in backend/scripts/import_doctor_registry.py.",
+      "downloaded_bytes": 0,
+      "file_path": null
+    },
+    {
+      "source_id": "abdm_health_facility_registry",
+      "name": "Ayushman Bharat Digital Mission (ABDM) Health Facility Registry",
+      "category": "hospitals",
+      "status": "RESTRICTED",
+      "notes": "Official ABDM health facility registry. Nationwide bulk exports require authenticated client credentials from the National Health Authority (NHA).",
+      "downloaded_bytes": 0,
+      "file_path": null
+    },
+    {
+      "source_id": "mendeley_mcld_laboratory",
+      "name": "Multi-Center Clinical Laboratory Dataset (MCLD) - Mendeley Data",
+      "category": "laboratory",
+      "status": "RESTRICTED",
+      "notes": "145,288 clinical laboratory records from 3 accredited medical laboratories. Mendeley portal requires manual single-sign-on or manual zip download into data/raw/laboratory/mcld/.",
+      "downloaded_bytes": 0,
+      "file_path": null
+    }
+  ]
+}

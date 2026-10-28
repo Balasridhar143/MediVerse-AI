@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+/* Base styling for calm, professional healthcare management system */
+@layer base {
+  html {
+    color: #1e293b;
+    background-color: #f8fafc;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Elder-Friendly Mode Global Accessibility Enhancements */
+  html.elder-mode {
+    font-size: 17px;
+    letter-spacing: 0.015em;
+  }
+
+  html.elder-mode button,
+  html.elder-mode a {
+    min-height: 44px;
+  }
+
+  /* Accessible focus outline */
+  :focus-visible {
+    outline: 2px solid #0d9488;
+    outline-offset: 2px;
+  }
+
+  /* Subtle healthcare scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #f1f5f9;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+}

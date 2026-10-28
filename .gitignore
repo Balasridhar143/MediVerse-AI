@@ -1,0 +1,25 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+__pycache__/
+*.pyc
+
+# Dataset storage (keep manifests and reports, ignore large raw/processed files)
+data/raw/*
+!data/raw/README.md
+data/processed/*
+!data/processed/README.md
+data/logs/*
+backend/uploads/*
+!backend/uploads/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+

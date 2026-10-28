@@ -1,0 +1,68 @@
+/**
+ * src/data/medicines.js
+ * Longitudinal Medicines Database for PulseCare.
+ * All records are fictional sample data for frontend prototype demonstration.
+ */
+
+export const mockPatientMedicines = [
+  {
+    id: 'med_1',
+    medicineId: 'MED-01',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    name: 'Telmisartan',
+    dosage: '40 mg',
+    slotName: 'Morning Medicine',
+    frequency: 'Once daily (OD)',
+    duration: '30 days',
+    timing: 'Morning',
+    mealRelation: 'After food',
+    reminderTime: '08:00 AM',
+    instructions: 'Take 1 tablet with a glass of water after breakfast. Check blood pressure regularly.',
+    status: 'Taken', // Taken, Pending, Skipped, Not Acknowledged
+    prescribedBy: 'Dr. Arun Kumar',
+    refillRemainingDays: 8,
+    whyTaking: 'To keep resting blood pressure controlled and protect cardiovascular health.',
+    purpose: 'Cardiovascular protection & arterial relaxation.',
+  },
+  {
+    id: 'med_2',
+    medicineId: 'MED-02',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    name: 'Metformin Hydrochloride',
+    dosage: '500 mg',
+    slotName: 'Morning & Night Medicine',
+    frequency: 'Twice daily (BD)',
+    duration: '60 days',
+    timing: 'Morning & Night',
+    mealRelation: 'With food',
+    reminderTime: '08:30 AM',
+    instructions: 'Take with food to minimize gastrointestinal discomfort.',
+    status: 'Taken',
+    prescribedBy: 'Dr. Sunita Deshmukh',
+    refillRemainingDays: 24,
+    whyTaking: 'To help your body respond better to natural insulin and maintain healthy fasting glucose.',
+    purpose: 'Blood sugar regulation.',
+  },
+  {
+    id: 'med_3',
+    medicineId: 'MED-03',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    name: 'Atorvastatin',
+    dosage: '10 mg',
+    slotName: 'Night Medicine',
+    frequency: 'Once daily (OD)',
+    duration: '30 days',
+    timing: 'Night',
+    mealRelation: 'After food',
+    reminderTime: '09:00 PM',
+    instructions: 'Take at bedtime after dinner. Avoid grapefruit products.',
+    status: 'Pending',
+    prescribedBy: 'Dr. Arun Kumar',
+    refillRemainingDays: 14,
+    whyTaking: 'To lower circulating LDL cholesterol and maintain clear artery walls.',
+    purpose: 'Lipid balance & vascular health.',
+  },
+];

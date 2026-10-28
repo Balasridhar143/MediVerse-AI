@@ -1,0 +1,97 @@
+/**
+ * src/data/prescriptions.js
+ * Longitudinal Prescriptions Database for PulseCare.
+ * All records are fictional sample data for frontend prototype demonstration.
+ */
+
+export const mockPrescriptionsList = [
+  {
+    id: 'rx_501',
+    prescriptionId: 'RX-2026-501',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Arun Kumar',
+    doctorId: 'D001',
+    department: 'Cardiology & Internal Medicine',
+    hospital: 'City Hospital Multispeciality',
+    date: '28 Aug 2026',
+    dateIso: '2026-08-28',
+    diagnosis: 'Stage 1 Essential Hypertension & Borderline Mixed Dyslipidemia',
+    status: 'Active',
+    safetyChecked: true,
+    safetyNotes: 'Automated pharmacovigilance verified: Zero penicillin molecules, no ACE/ARB duplicate, normal renal clearance.',
+    medicines: [
+      {
+        name: 'Telmisartan',
+        dosage: '40 mg',
+        frequency: 'Once daily (1-0-0)',
+        timing: 'Morning',
+        duration: '30 days',
+        instructions: 'Take 1 tablet with water after morning breakfast. Check BP weekly.',
+      },
+      {
+        name: 'Atorvastatin',
+        dosage: '10 mg',
+        frequency: 'Once daily (0-0-1)',
+        timing: 'Night',
+        duration: '30 days',
+        instructions: 'Take 1 tablet at bedtime after dinner. Avoid grapefruit juice.',
+      },
+    ],
+    doctorSignature: 'Verified (Dr. Arun Kumar, Reg: MCI-45291)',
+  },
+  {
+    id: 'rx_502',
+    prescriptionId: 'RX-2026-502',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Sunita Deshmukh',
+    doctorId: 'D003',
+    department: 'General & Preventive Medicine',
+    hospital: 'Metro General Healthcare',
+    date: '15 Aug 2026',
+    dateIso: '2026-08-15',
+    diagnosis: 'Impaired Fasting Glycemia (Pre-diabetes)',
+    status: 'Active',
+    safetyChecked: true,
+    safetyNotes: 'Contrast media warning acknowledged: pause 48h prior to elective iodinated imaging.',
+    medicines: [
+      {
+        name: 'Metformin Hydrochloride',
+        dosage: '500 mg',
+        frequency: 'Twice daily (1-0-1)',
+        timing: 'Morning & Night',
+        duration: '60 days',
+        instructions: 'Take with or immediately after meals to reduce stomach discomfort.',
+      },
+    ],
+    doctorSignature: 'Verified (Dr. Sunita Deshmukh, Reg: DNB-88120)',
+  },
+  {
+    id: 'rx_498',
+    prescriptionId: 'RX-2026-498',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Sunita Deshmukh',
+    doctorId: 'D003',
+    department: 'General Medicine',
+    hospital: 'Metro General Healthcare',
+    date: '10 Jun 2026',
+    dateIso: '2026-06-10',
+    diagnosis: 'Upper Respiratory Viral Illness (Seasonal)',
+    status: 'Completed',
+    safetyChecked: true,
+    safetyNotes: 'Penicillin-free symptomatic relief.',
+    medicines: [
+      {
+        name: 'Paracetamol',
+        dosage: '650 mg',
+        frequency: 'As needed (SOS, max 3 times daily)',
+        timing: 'After food',
+        duration: '5 days',
+        instructions: 'Take only if fever or body aches exceed 100°F.',
+      },
+    ],
+    doctorSignature: 'Verified (Dr. Sunita Deshmukh, Reg: DNB-88120)',
+  },
+];

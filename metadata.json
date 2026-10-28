@@ -1,0 +1,6 @@
+{
+  "name": "TeleHealth - Telemedicine & Longitudinal Health System",
+  "description": "AI-Powered Integrated Telemedicine and Longitudinal Patient Health Management System with Patient, Doctor, and Hospital Admin dashboards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

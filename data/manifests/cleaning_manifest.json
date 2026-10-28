@@ -1,0 +1,15 @@
+{
+  "pipeline_completed_at": "2026-10-28T06:38:38.635798+00:00",
+  "total_raw_records": 888295,
+  "total_valid_cleaned_records": 741548,
+  "estimated_duplicates_rejected": 146747,
+  "categories": {
+    "hospitals": 51089,
+    "healthcare_facilities": 214446,
+    "professionals": 8151,
+    "medicines": 251320,
+    "public_health_indicators": 9502,
+    "laboratory_observations": 95246,
+    "medical_documents": 111794
+  }
+}

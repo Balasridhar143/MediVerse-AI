@@ -1,0 +1,60 @@
+/**
+ * src/data/appointments.js
+ * Longitudinal Appointments Database for PulseCare.
+ * All records are fictional sample data for frontend prototype demonstration.
+ */
+
+export const mockAppointmentsList = [
+  {
+    id: 'apt_101',
+    appointmentId: 'APT-101',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Arun Kumar',
+    doctorId: 'D001',
+    specialization: 'Cardiology & Internal Medicine',
+    hospital: 'City Hospital Multispeciality',
+    department: 'Cardiology',
+    date: '28 Sep 2026',
+    dateIso: '2026-09-28',
+    time: '10:15 AM',
+    type: 'Video Consultation',
+    status: 'Upcoming',
+    roomLink: 'https://meet.telehealth.internal/apt-101',
+    notes: 'Routine hypertension follow-up & reviewing CBC Hemogram report findings.',
+  },
+  {
+    id: 'apt_100',
+    appointmentId: 'APT-100',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Sunita Deshmukh',
+    doctorId: 'D003',
+    specialization: 'General & Preventive Medicine',
+    hospital: 'Metro General Healthcare',
+    department: 'General Medicine',
+    date: '15 Aug 2026',
+    dateIso: '2026-08-15',
+    time: '11:30 AM',
+    type: 'In-Person',
+    status: 'Completed',
+    notes: 'Pre-diabetes screening, HbA1c review, commenced Metformin 500mg BD.',
+  },
+  {
+    id: 'apt_098',
+    appointmentId: 'APT-098',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Arun Kumar',
+    doctorId: 'D001',
+    specialization: 'Cardiology',
+    hospital: 'City Hospital Multispeciality',
+    department: 'Cardiology',
+    date: '20 Jun 2026',
+    dateIso: '2026-06-20',
+    time: '02:00 PM',
+    type: 'Video Consultation',
+    status: 'Completed',
+    notes: 'Initial evaluation of blood pressure readings and baseline workup request.',
+  },
+];
