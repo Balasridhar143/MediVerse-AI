@@ -130,6 +130,68 @@ async function init() {
   await sql`CREATE INDEX IF NOT EXISTS idx_reports_user_id ON medical_reports(user_id);`;
   console.log('[PASS] medical_reports table verified');
 
+  // 8. Create appointments table
+  await sql`
+    CREATE TABLE IF NOT EXISTS appointments (
+      id VARCHAR(64) PRIMARY KEY,
+      patient_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
+      doctor_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
+      doctor_profile_id VARCHAR(64),
+      doctor_name VARCHAR(128) NOT NULL,
+      patient_name VARCHAR(128) NOT NULL,
+      patient_phone VARCHAR(32),
+      patient_email VARCHAR(128),
+      hospital_name VARCHAR(256),
+      specialization VARCHAR(128),
+      department VARCHAR(128) DEFAULT 'General Medicine',
+      appointment_date VARCHAR(32) NOT NULL,
+      time_slot VARCHAR(32) NOT NULL,
+      type VARCHAR(64) NOT NULL DEFAULT 'Video Consultation',
+      notes TEXT,
+      status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+      rejection_reason TEXT,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_appointments_patient_id ON appointments(patient_id);`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_appointments_doctor_id ON appointments(doctor_id);`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_appointments_status ON appointments(status);`;
+  console.log('[PASS] appointments table verified');
+
+  // 9. Create notifications table
+  await sql`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type VARCHAR(64) NOT NULL,
+      title VARCHAR(256) NOT NULL,
+      message TEXT NOT NULL,
+      entity_id VARCHAR(64),
+      link_url VARCHAR(256),
+      is_read BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);`;
+  console.log('[PASS] notifications table verified');
+
+  // 10. Enhance doctors table with profile & availability fields
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS experience_years INT DEFAULT 5;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS rating NUMERIC(3,1) DEFAULT 4.8;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS review_count INT DEFAULT 12;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS consultation_fee NUMERIC(8,2) DEFAULT 500.00;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS about TEXT;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS available_days JSONB DEFAULT '["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]'::jsonb;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS available_slots JSONB DEFAULT '["09:00 AM", "10:00 AM", "11:00 AM", "02:00 PM", "03:00 PM", "04:00 PM"]'::jsonb;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS consultation_types JSONB DEFAULT '["Video Consultation", "In-Person"]'::jsonb;`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS department VARCHAR(128) DEFAULT 'General Medicine';`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS location VARCHAR(256) DEFAULT 'Central Campus, Sector 4';`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS qualifications VARCHAR(256) DEFAULT 'MBBS, MD';`;
+  await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;`;
+  console.log('[PASS] doctors table enhanced with scheduling and profile fields');
+
   console.log('=== NEON POSTGRESQL INITIALIZATION COMPLETE ===');
 }
 

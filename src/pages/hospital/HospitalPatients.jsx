@@ -1,20 +1,31 @@
-import React, { useState } from 'react';
-import { mockPatients } from '../../data/mockData';
+import React, { useState, useEffect } from 'react';
+import { hospitalDataService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import StatusBadge from '../../components/StatusBadge';
-import { Users, Search, Plus, Filter } from 'lucide-react';
+import { Users, Search, Plus, Filter, Loader2 } from 'lucide-react';
 
 export default function HospitalPatients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [patients, setPatients] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const filteredPatients = mockPatients.filter((p) => {
+  useEffect(() => {
+    hospitalDataService.getPatients()
+      .then((data) => setPatients(data || []))
+      .catch((err) => console.error('Failed to fetch hospital patients:', err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filteredPatients = patients.filter((p) => {
+    const s = searchTerm.toLowerCase();
     const matchesSearch =
-      p.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.patientId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      p.primaryCondition.toLowerCase().includes(searchTerm.toLowerCase());
+      !s ||
+      (p.patientName && p.patientName.toLowerCase().includes(s)) ||
+      (p.patientId && p.patientId.toLowerCase().includes(s)) ||
+      (p.primaryCondition && p.primaryCondition.toLowerCase().includes(s));
     const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
@@ -24,7 +35,7 @@ export default function HospitalPatients() {
       {/* Page Header */}
       <PageHeader
         badge="Patient Registry"
-        badgeStatus="1,248 Records"
+        badgeStatus={`${patients.length} Live Database Records`}
         title="Central Hospital Patient Registry"
         subtitle="Master demographic and clinical admissions ledger for all registered patients"
         action={
@@ -41,14 +52,6 @@ export default function HospitalPatients() {
                 className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white focus:border-teal-500"
               />
             </div>
-            <Button
-              variant="primary"
-              size="sm"
-              icon={Plus}
-              onClick={() => alert('Prototype action: Register New Inpatient / Outpatient')}
-            >
-              Register Patient
-            </Button>
           </div>
         }
       />
@@ -58,7 +61,7 @@ export default function HospitalPatients() {
         <span className="text-slate-500 font-medium shrink-0 flex items-center gap-1">
           <Filter className="w-3.5 h-3.5" /> Status:
         </span>
-        {['All', 'Active Care', 'Stable', 'Review Required', 'Admitted (ICU)'].map((status) => (
+        {['All', 'Active Care', 'Outpatient Care', 'Admitted'].map((status) => (
           <button
             key={status}
             onClick={() => setStatusFilter(status)}
@@ -75,59 +78,61 @@ export default function HospitalPatients() {
 
       {/* Patients Table */}
       <Card title="Admitted & Registered Patient Directory" icon={Users}>
-        <div className="overflow-x-auto -mx-4 md:-mx-5">
-          <div className="inline-block min-w-full align-middle px-4 md:px-5">
-            <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
-              <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
-                <tr>
-                  <th className="py-3 px-3">Patient ID</th>
-                  <th className="py-3 px-3">Patient Name</th>
-                  <th className="py-3 px-3">Age / Gender</th>
-                  <th className="py-3 px-3">Blood Group</th>
-                  <th className="py-3 px-3">Primary Diagnosis</th>
-                  <th className="py-3 px-3">Assigned Physician</th>
-                  <th className="py-3 px-3">Admission Status</th>
-                  <th className="py-3 px-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredPatients.map((p) => (
-                  <tr key={p.patientId} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">
-                      {p.patientId}
-                    </td>
-                    <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
-                      {p.patientName}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      {p.age}y / {p.gender}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-700">
-                      {p.bloodGroup}
-                    </td>
-                    <td className="py-3 px-3 font-medium text-slate-800">
-                      {p.primaryCondition}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap text-slate-600">
-                      {p.assignedDoctor}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <StatusBadge status={p.status} size="xs" />
-                    </td>
-                    <td className="py-3 px-3 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => alert(`Prototype action: Viewing clinical dossier for ${p.patientId}`)}
-                        className="px-2.5 py-1 text-xs font-semibold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 transition-colors cursor-pointer"
-                      >
-                        View Dossier
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {loading ? (
+          <div className="p-8 text-center text-xs text-slate-500">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto text-teal-600 mb-2" />
+            Loading registered patients...
           </div>
-        </div>
+        ) : filteredPatients.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-500">
+            No registered patients found matching your query.
+          </div>
+        ) : (
+          <div className="overflow-x-auto -mx-4 md:-mx-5">
+            <div className="inline-block min-w-full align-middle px-4 md:px-5">
+              <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
+                <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
+                  <tr>
+                    <th className="py-3 px-3">Patient ID</th>
+                    <th className="py-3 px-3">Patient Name</th>
+                    <th className="py-3 px-3">Age / Gender</th>
+                    <th className="py-3 px-3">Blood Group</th>
+                    <th className="py-3 px-3">Clinical Status</th>
+                    <th className="py-3 px-3">Assigned Physician</th>
+                    <th className="py-3 px-3">Admission Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredPatients.map((p) => (
+                    <tr key={p.patientId} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">
+                        {p.patientId}
+                      </td>
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">
+                        {p.patientName}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        {p.age}y / {p.gender}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-700">
+                        {p.bloodGroup}
+                      </td>
+                      <td className="py-3 px-3 font-medium text-slate-800">
+                        {p.primaryCondition}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap text-slate-600">
+                        {p.assignedDoctor}
+                      </td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <StatusBadge status={p.status} size="xs" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

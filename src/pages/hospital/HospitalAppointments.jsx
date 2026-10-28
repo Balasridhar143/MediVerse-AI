@@ -1,23 +1,35 @@
-import React, { useState } from 'react';
-import { mockHospitalAppointments, mockDepartments } from '../../data/mockData';
+import React, { useState, useEffect } from 'react';
+import { hospitalDataService } from '../../services/api';
+import { mockDepartments } from '../../data/mockData';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import StatusBadge from '../../components/StatusBadge';
-import { Calendar, Search, Filter } from 'lucide-react';
+import { Calendar, Search, Filter, Loader2 } from 'lucide-react';
 
 export default function HospitalAppointments() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDept, setSelectedDept] = useState('All');
   const [selectedStatus, setSelectedStatus] = useState('All');
+  const [appointments, setAppointments] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const filteredAppointments = mockHospitalAppointments.filter((apt) => {
+  useEffect(() => {
+    hospitalDataService.getAppointments()
+      .then((data) => setAppointments(data || []))
+      .catch((err) => console.error('Failed to fetch hospital appointments:', err))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filteredAppointments = appointments.filter((apt) => {
+    const s = searchTerm.toLowerCase();
     const matchesSearch =
-      apt.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      apt.doctorName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      apt.id.toLowerCase().includes(searchTerm.toLowerCase());
+      !s ||
+      (apt.patientName && apt.patientName.toLowerCase().includes(s)) ||
+      (apt.doctorName && apt.doctorName.toLowerCase().includes(s)) ||
+      (apt.id && apt.id.toLowerCase().includes(s));
     const matchesDept = selectedDept === 'All' || apt.department === selectedDept;
-    const matchesStatus = selectedStatus === 'All' || apt.status === selectedStatus;
+    const matchesStatus = selectedStatus === 'All' || (apt.status || '').toUpperCase() === selectedStatus.toUpperCase();
     return matchesSearch && matchesDept && matchesStatus;
   });
 
@@ -71,9 +83,10 @@ export default function HospitalAppointments() {
             className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
           >
             <option value="All">All Statuses</option>
-            <option value="Upcoming">Upcoming</option>
-            <option value="Completed">Completed</option>
-            <option value="Cancelled">Cancelled</option>
+            <option value="PENDING">Pending</option>
+            <option value="CONFIRMED">Confirmed</option>
+            <option value="CANCELLED">Cancelled</option>
+            <option value="COMPLETED">Completed</option>
           </select>
         </div>
 
@@ -84,49 +97,51 @@ export default function HospitalAppointments() {
 
       {/* Master Appointments Table */}
       <Card title="Appointment Ledger Entries" icon={Calendar}>
-        <div className="overflow-x-auto -mx-4 md:-mx-5">
-          <div className="inline-block min-w-full align-middle px-4 md:px-5">
-            <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
-              <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
-                <tr>
-                  <th className="py-3 px-3">Appointment ID</th>
-                  <th className="py-3 px-3">Patient Name</th>
-                  <th className="py-3 px-3">Physician</th>
-                  <th className="py-3 px-3">Department</th>
-                  <th className="py-3 px-3">Date</th>
-                  <th className="py-3 px-3">Time Slot</th>
-                  <th className="py-3 px-3">Mode</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredAppointments.map((apt) => (
-                  <tr key={apt.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">{apt.id}</td>
-                    <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
-                    <td className="py-3 px-3 whitespace-nowrap">{apt.doctorName}</td>
-                    <td className="py-3 px-3 whitespace-nowrap">{apt.department}</td>
-                    <td className="py-3 px-3 whitespace-nowrap">{apt.date}</td>
-                    <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">{apt.time}</td>
-                    <td className="py-3 px-3 whitespace-nowrap">{apt.type}</td>
-                    <td className="py-3 px-3 whitespace-nowrap">
-                      <StatusBadge status={apt.status} size="xs" />
-                    </td>
-                    <td className="py-3 px-3 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => alert(`Prototype action: Managing schedule entry ${apt.id}`)}
-                        className="px-2.5 py-1 text-xs font-semibold text-slate-700 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded border border-slate-200 transition-colors cursor-pointer"
-                      >
-                        Details
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {loading ? (
+          <div className="p-8 text-center text-xs text-slate-500">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto text-teal-600 mb-2" />
+            Loading master appointments ledger...
           </div>
-        </div>
+        ) : filteredAppointments.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-500">
+            No appointments found matching your query.
+          </div>
+        ) : (
+          <div className="overflow-x-auto -mx-4 md:-mx-5">
+            <div className="inline-block min-w-full align-middle px-4 md:px-5">
+              <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
+                <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
+                  <tr>
+                    <th className="py-3 px-3">Appointment ID</th>
+                    <th className="py-3 px-3">Patient Name</th>
+                    <th className="py-3 px-3">Physician</th>
+                    <th className="py-3 px-3">Department</th>
+                    <th className="py-3 px-3">Date</th>
+                    <th className="py-3 px-3">Time Slot</th>
+                    <th className="py-3 px-3">Mode</th>
+                    <th className="py-3 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {filteredAppointments.map((apt) => (
+                    <tr key={apt.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">{apt.id}</td>
+                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">{apt.doctorName}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">{apt.department}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">{apt.date}</td>
+                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">{apt.time}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">{apt.type}</td>
+                      <td className="py-3 px-3 whitespace-nowrap">
+                        <StatusBadge status={apt.status} size="xs" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Card>
     </div>
   );

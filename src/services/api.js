@@ -476,4 +476,119 @@ export const prescriptionService = {
   },
 };
 
+/**
+ * Doctor Service
+ */
+export const doctorService = {
+  async getDoctors(params = {}) {
+    const res = await api.get('/doctors', { params });
+    return res.data;
+  },
+
+  async getDoctorById(id) {
+    const res = await api.get(`/doctors/${id}`);
+    return res.data;
+  },
+
+  async updateProfile(profileData) {
+    const res = await api.put('/doctor/profile', profileData);
+    return res.data;
+  },
+
+  async updateAvailability(availabilityData) {
+    const res = await api.put('/doctor/availability', availabilityData);
+    return res.data;
+  },
+
+  async getDoctorStats() {
+    const res = await api.get('/doctor/stats');
+    return res.data;
+  },
+
+  async getDoctorPatients() {
+    const res = await api.get('/doctor/patients');
+    return res.data;
+  },
+};
+
+/**
+ * Appointment Service
+ */
+export const appointmentService = {
+  async bookAppointment(appointmentData) {
+    const res = await api.post('/appointments', appointmentData);
+    return res.data;
+  },
+
+  async getMyAppointments() {
+    const res = await api.get('/appointments/my-appointments');
+    return res.data;
+  },
+
+  async getDoctorAppointments() {
+    const res = await api.get('/doctor/appointments');
+    return res.data;
+  },
+
+  async acceptAppointment(id) {
+    const res = await api.patch(`/appointments/${id}/accept`);
+    return res.data;
+  },
+
+  async rejectAppointment(id, reason = '') {
+    const res = await api.patch(`/appointments/${id}/reject`, { reason });
+    return res.data;
+  },
+
+  async cancelAppointment(id) {
+    const res = await api.patch(`/appointments/${id}/cancel`);
+    return res.data;
+  },
+};
+
+/**
+ * Persistent Notification Service
+ */
+export const notificationService = {
+  async getNotifications() {
+    const res = await api.get('/notifications');
+    return res.data;
+  },
+
+  async markAsRead(id) {
+    const res = await api.patch(`/notifications/${id}/read`);
+    return res.data;
+  },
+
+  async markAllAsRead() {
+    const res = await api.patch('/notifications/read-all');
+    return res.data;
+  },
+};
+
+/**
+ * Hospital Data Service
+ */
+export const hospitalDataService = {
+  async getDashboardData() {
+    const res = await api.get('/hospital/dashboard-data');
+    return res.data;
+  },
+
+  async getDoctors() {
+    const res = await api.get('/hospital/doctors');
+    return res.data;
+  },
+
+  async getAppointments() {
+    const res = await api.get('/hospital/appointments');
+    return res.data;
+  },
+
+  async getPatients() {
+    const res = await api.get('/hospital/patients');
+    return res.data;
+  },
+};
+
 export default api;

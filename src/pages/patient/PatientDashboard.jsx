@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { appointmentService } from '../../services/api';
 import {
-  mockAppointments,
   mockMedicines,
   mockMedicalReports,
   mockVitalsHistory,
@@ -33,6 +33,7 @@ import {
   Upload,
   FileText,
   Users,
+  Plus,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -48,6 +49,16 @@ export default function PatientDashboard() {
   const { user } = useAuth();
   const [medicines, setMedicines] = useState(mockMedicines);
   const [vitalsModal, setVitalsModal] = useState(false);
+  const [realAppointments, setRealAppointments] = useState([]);
+  const [loadingAppts, setLoadingAppts] = useState(true);
+
+  useEffect(() => {
+    appointmentService.getMyAppointments()
+      .then((data) => setRealAppointments(data || []))
+      .catch((err) => console.error('Failed to fetch patient appointments:', err))
+      .finally(() => setLoadingAppts(false));
+  }, []);
+
   const [latestVitals, setLatestVitals] = useState({
     bp: '124/80',
     heartRate: 72,
@@ -61,8 +72,9 @@ export default function PatientDashboard() {
     glucose: '108',
   });
 
-  const nextAppointment =
-    mockAppointments.find((a) => a.status === 'Upcoming') || mockAppointments[0];
+  const nextAppointment = realAppointments.find(
+    (a) => (a.status || '').toUpperCase() === 'CONFIRMED' || (a.status || '').toUpperCase() === 'PENDING'
+  ) || null;
   const recentReport = mockMedicalReports[0];
   const upcomingFollowUp = mockFollowUps && mockFollowUps.length > 0 ? mockFollowUps[0] : null;
 
@@ -272,7 +284,14 @@ export default function PatientDashboard() {
         </Card>
       ) : (
         <Card title="Upcoming Appointment" icon={Calendar}>
-          <p className="text-xs text-slate-500">No upcoming appointments scheduled.</p>
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 py-2">
+            <span>No upcoming consultations scheduled with your doctors.</span>
+            <Link to="/patient/find-doctor">
+              <Button variant="primary" size="sm" icon={Calendar}>
+                Book Consultation
+              </Button>
+            </Link>
+          </div>
         </Card>
       )}
 

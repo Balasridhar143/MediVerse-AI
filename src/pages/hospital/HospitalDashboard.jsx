@@ -1,12 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import {
-  mockDepartments,
-  mockDoctors,
-  mockHospitalAppointments,
-  mockEmergencyCases,
-} from '../../data/mockData';
+import { hospitalDataService } from '../../services/api';
+import { mockDepartments, mockEmergencyCases } from '../../data/mockData';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -20,10 +16,32 @@ import {
   Stethoscope,
   Bed,
   Plus,
+  Loader2,
 } from 'lucide-react';
 
 export default function HospitalDashboard() {
   const { user } = useAuth();
+  const [dashboardData, setDashboardData] = useState({
+    doctors_count: 0,
+    appointments_count: 0,
+    registrations_count: 0,
+    recent_appointments: [],
+  });
+  const [doctorsList, setDoctorsList] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      hospitalDataService.getDashboardData().catch(() => null),
+      hospitalDataService.getDoctors().catch(() => []),
+    ]).then(([dash, docs]) => {
+      if (dash) setDashboardData(dash);
+      if (docs) setDoctorsList(docs);
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const hospitalTitle = user?.hospital_name || user?.hospitalName || 'City Care Multispeciality Hospital';
+  const facilityCode = user?.facility_id || user?.facilityId || 'NABH-2026-09';
 
   return (
     <div className="space-y-6">
@@ -31,8 +49,8 @@ export default function HospitalDashboard() {
       <PageHeader
         badge="Hospital Administration"
         badgeStatus="NABH Accredited"
-        title="City Care Multispeciality Hospital"
-        subtitle="Facility ID: NABH-2026-09 • Central Campus, Sector 4, Tech Zone • 24x7 Emergency Active"
+        title={hospitalTitle}
+        subtitle={`Facility ID: ${facilityCode} • Central Campus, Sector 4, Tech Zone • 24x7 Emergency Active`}
         action={
           <>
             <Link to="/hospital/emergency-cases">
@@ -81,8 +99,8 @@ export default function HospitalDashboard() {
 
       {/* 3. Today's Appointments Overview */}
       <Card
-        title="Today's Appointments Overview"
-        subtitle="Centralized patient consultation schedule across all departments"
+        title="Recent Appointments Ledger"
+        subtitle="Centralized patient consultation schedule recorded in facility registry"
         icon={Calendar}
         action={
           <Link
@@ -93,38 +111,49 @@ export default function HospitalDashboard() {
           </Link>
         }
       >
-        <div className="overflow-x-auto -mx-4 md:-mx-5">
-          <div className="inline-block min-w-full align-middle px-4 md:px-5">
-            <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
-              <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
-                <tr>
-                  <th className="py-2.5 px-3">Appointment ID</th>
-                  <th className="py-2.5 px-3">Patient</th>
-                  <th className="py-2.5 px-3">Doctor</th>
-                  <th className="py-2.5 px-3">Department</th>
-                  <th className="py-2.5 px-3">Scheduled Time</th>
-                  <th className="py-2.5 px-3">Mode</th>
-                  <th className="py-2.5 px-3">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {mockHospitalAppointments.slice(0, 4).map((apt) => (
-                  <tr key={apt.id} className="hover:bg-slate-50/80">
-                    <td className="py-2.5 px-3 font-semibold text-teal-700 whitespace-nowrap">{apt.id}</td>
-                    <td className="py-2.5 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">{apt.doctorName}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">{apt.department}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">{apt.time}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">{apt.type}</td>
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      <StatusBadge status={apt.status} size="xs" />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {loading ? (
+          <div className="p-8 text-center">
+            <Loader2 className="w-6 h-6 text-teal-600 animate-spin mx-auto" />
+            <span className="text-xs text-slate-500 mt-2 block">Loading appointments...</span>
           </div>
-        </div>
+        ) : dashboardData.recent_appointments.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg">
+            No consultations recorded yet. Patient bookings will populate the master ledger automatically.
+          </div>
+        ) : (
+          <div className="overflow-x-auto -mx-4 md:-mx-5">
+            <div className="inline-block min-w-full align-middle px-4 md:px-5">
+              <table className="min-w-full text-left text-xs text-slate-700 divide-y divide-slate-200">
+                <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
+                  <tr>
+                    <th className="py-2.5 px-3">Appointment ID</th>
+                    <th className="py-2.5 px-3">Patient</th>
+                    <th className="py-2.5 px-3">Doctor</th>
+                    <th className="py-2.5 px-3">Department</th>
+                    <th className="py-2.5 px-3">Scheduled Time</th>
+                    <th className="py-2.5 px-3">Mode</th>
+                    <th className="py-2.5 px-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {dashboardData.recent_appointments.map((apt) => (
+                    <tr key={apt.id} className="hover:bg-slate-50/80">
+                      <td className="py-2.5 px-3 font-semibold text-teal-700 whitespace-nowrap">{apt.id}</td>
+                      <td className="py-2.5 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{apt.doctorName}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{apt.department}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{apt.date} • {apt.time}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">{apt.type}</td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <StatusBadge status={apt.status} size="xs" />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* 4. Doctor Availability & 5. Emergency Status */}
@@ -143,22 +172,33 @@ export default function HospitalDashboard() {
             </Link>
           }
         >
-          <div className="space-y-2.5 text-xs">
-            {mockDoctors.slice(0, 4).map((doc) => (
-              <div
-                key={doc.id}
-                className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3"
-              >
-                <div>
-                  <h4 className="font-bold text-slate-900">{doc.name}</h4>
-                  <p className="text-slate-500 text-[11px]">
-                    {doc.specialization} • Room: <strong>{doc.room}</strong>
-                  </p>
+          {loading ? (
+            <div className="p-6 text-center text-xs text-slate-500">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto text-teal-600 mb-1" />
+              Loading medical staff...
+            </div>
+          ) : doctorsList.length === 0 ? (
+            <div className="p-4 text-center text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg">
+              No registered physicians found in hospital scope.
+            </div>
+          ) : (
+            <div className="space-y-2.5 text-xs">
+              {doctorsList.slice(0, 4).map((doc) => (
+                <div
+                  key={doc.id}
+                  className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <h4 className="font-bold text-slate-900">{doc.name}</h4>
+                    <p className="text-slate-500 text-[11px]">
+                      {doc.specialization} • {doc.department} • Room: <strong>{doc.room}</strong>
+                    </p>
+                  </div>
+                  <StatusBadge status={doc.status} size="xs" />
                 </div>
-                <StatusBadge status={doc.status} size="xs" />
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
 
         {/* 5. Emergency Status */}
@@ -215,21 +255,21 @@ export default function HospitalDashboard() {
           </div>
 
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-            <span className="text-slate-500 block mb-1">Doctors On Duty</span>
-            <p className="text-xl font-bold text-slate-900">24</p>
-            <span className="text-[11px] text-emerald-700 font-medium">Full Roster Present</span>
+            <span className="text-slate-500 block mb-1">Doctors Registered</span>
+            <p className="text-xl font-bold text-slate-900">{dashboardData.doctors_count || doctorsList.length}</p>
+            <span className="text-[11px] text-emerald-700 font-medium">Verified Medical Staff</span>
           </div>
 
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
             <span className="text-slate-500 block mb-1">Total Consultations</span>
-            <p className="text-xl font-bold text-slate-900">112</p>
-            <span className="text-[11px] text-teal-700 font-medium">Scheduled Today</span>
+            <p className="text-xl font-bold text-slate-900">{dashboardData.appointments_count}</p>
+            <span className="text-[11px] text-teal-700 font-medium">Recorded in DB</span>
           </div>
 
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-            <span className="text-slate-500 block mb-1">Emergency Trauma</span>
-            <p className="text-xl font-bold text-rose-700">3</p>
-            <span className="text-[11px] text-rose-700 font-medium">Active Triage Cases</span>
+            <span className="text-slate-500 block mb-1">Walk-in Registrations</span>
+            <p className="text-xl font-bold text-teal-700">{dashboardData.registrations_count}</p>
+            <span className="text-[11px] text-teal-700 font-medium">Active OP Visits</span>
           </div>
         </div>
       </Card>

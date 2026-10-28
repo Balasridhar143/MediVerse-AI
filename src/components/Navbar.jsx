@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { notificationService } from '../services/api';
 import {
   Menu,
   Bell,
@@ -68,22 +69,53 @@ export default function Navbar({ onToggleSidebar }) {
     return 'PulseCare';
   };
 
-  const sampleNotifications = [
-    {
-      id: 1,
-      title: 'Upcoming Clinical Schedule',
-      desc: 'Scheduled session today at 10:15 AM',
-      time: '15 mins ago',
-      unread: true,
-    },
-    {
-      id: 2,
-      title: 'Diagnostic System Sync',
-      desc: 'Laboratory records updated in electronic repository',
-      time: '2 hours ago',
-      unread: false,
-    },
-  ];
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  const fetchLiveNotifications = async () => {
+    try {
+      const res = await notificationService.getNotifications();
+      if (res) {
+        setNotifications(res.notifications || []);
+        setUnreadCount(res.unread_count || 0);
+      }
+    } catch (err) {
+      // Non-intrusive logging
+      console.warn('Unable to sync live notifications:', err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchLiveNotifications();
+      const interval = setInterval(fetchLiveNotifications, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [user]);
+
+  const handleMarkAsRead = async (notif) => {
+    if (!notif.is_read) {
+      try {
+        await notificationService.markAsRead(notif.id);
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notif.id ? { ...n, is_read: true } : n))
+        );
+        setUnreadCount((c) => Math.max(0, c - 1));
+      } catch (e) {}
+    }
+    if (notif.link_url) {
+      setShowNotifs(false);
+      navigate(notif.link_url);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      await notificationService.markAllAsRead();
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      setUnreadCount(0);
+    } catch (e) {}
+  };
 
   const roleLabel =
     role === 'doctor'
@@ -138,38 +170,64 @@ export default function Navbar({ onToggleSidebar }) {
             onClick={() => {
               setShowNotifs(!showNotifs);
               setShowUserMenu(false);
+              if (!showNotifs) fetchLiveNotifications();
             }}
             className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer relative"
             title="View notifications"
             aria-label="Notifications"
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-teal-600 rounded-full"></span>
+            {unreadCount > 0 && (
+              <span className="absolute top-1 right-1 min-w-[16px] h-4 px-1 bg-teal-600 text-white rounded-full text-[10px] font-bold flex items-center justify-center">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </button>
 
           {showNotifs && (
-            <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-white border border-slate-200 rounded-xl shadow-lg z-50 overflow-hidden text-xs">
+            <div className="absolute right-0 mt-2 w-72 sm:w-84 bg-white border border-slate-200 rounded-xl shadow-lg z-50 overflow-hidden text-xs">
               <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
                 <span className="font-bold text-slate-900">Notifications</span>
-                <span className="text-[10px] text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 font-semibold">
-                  1 New
-                </span>
+                <div className="flex items-center gap-2">
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={handleMarkAllRead}
+                      className="text-[10px] text-teal-700 hover:underline cursor-pointer font-medium"
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                  <span className="text-[10px] text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 font-semibold">
+                    {unreadCount} Unread
+                  </span>
+                </div>
               </div>
               <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
-                {sampleNotifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`p-3 space-y-0.5 hover:bg-slate-50 transition-colors ${
-                      notif.unread ? 'bg-teal-50/30' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <p className="font-semibold text-slate-800">{notif.title}</p>
-                      <span className="text-[10px] text-slate-400">{notif.time}</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed">{notif.desc}</p>
+                {notifications.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-400">
+                    No notifications yet. Clinical updates and appointment confirmations will appear here.
                   </div>
-                ))}
+                ) : (
+                  notifications.map((notif) => (
+                    <div
+                      key={notif.id}
+                      onClick={() => handleMarkAsRead(notif)}
+                      className={`p-3 space-y-0.5 hover:bg-slate-50 transition-colors cursor-pointer ${
+                        !notif.is_read ? 'bg-teal-50/40' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className={`font-semibold ${!notif.is_read ? 'text-teal-950 font-bold' : 'text-slate-800'}`}>
+                          {notif.title}
+                        </p>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(notif.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-600 leading-relaxed">{notif.message}</p>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           )}
