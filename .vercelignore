@@ -14,3 +14,10 @@ data/raw
 data/processed
 data/logs
 backend/uploads
+android
+android-sdk
+jdk-17
+.gradle
+*.apk
+*.zip
+.agents

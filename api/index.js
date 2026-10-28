@@ -617,13 +617,13 @@ app.post(['/auth/forgot-password', '/api/auth/forgot-password'], async (req, res
 // Verify OTP (for Password Reset or Login)
 app.post(['/auth/verify-otp', '/api/auth/verify-otp'], async (req, res) => {
   try {
-    const { email, otp_code, purpose = 'PASSWORD_RESET' } = req.body;
-    if (!email || !otp_code) {
+    const { email, otp_code, code, otp, purpose = 'PASSWORD_RESET' } = req.body;
+    const cleanCode = String(otp_code || code || otp || '').trim();
+    if (!email || !cleanCode) {
       return res.status(400).json({ detail: 'Email and verification code are required.' });
     }
 
     const cleanEmail = email.toLowerCase().trim();
-    const cleanCode = String(otp_code).trim();
     const sql = getDb();
     await ensureTables(sql);
 
@@ -728,18 +728,19 @@ app.post(['/auth/verify-otp', '/api/auth/verify-otp'], async (req, res) => {
 // Set New Password using Reset Token
 app.post(['/auth/reset-password', '/api/auth/reset-password'], async (req, res) => {
   try {
-    const { reset_token, new_password } = req.body;
-    if (!reset_token || !new_password) {
+    const token = req.body.reset_token || req.body.resetToken;
+    const password = req.body.new_password || req.body.newPassword;
+    if (!token || !password) {
       return res.status(400).json({ detail: 'Reset token and new password are required.' });
     }
 
-    if (new_password.length < 6) {
+    if (password.length < 6) {
       return res.status(422).json({ detail: 'Password must be at least 6 characters long.' });
     }
 
     let decoded;
     try {
-      decoded = jwt.verify(reset_token, JWT_SECRET);
+      decoded = jwt.verify(token, JWT_SECRET);
     } catch (e) {
       return res.status(401).json({ detail: 'Invalid or expired password reset session. Please request a new code.' });
     }
@@ -758,7 +759,7 @@ app.post(['/auth/reset-password', '/api/auth/reset-password'], async (req, res) 
     }
 
     // Hash new password securely
-    const passwordHash = await bcrypt.hash(new_password, 10);
+    const passwordHash = await bcrypt.hash(password, 10);
     await sql`
       UPDATE users
       SET password_hash = ${passwordHash}, updated_at = NOW()
