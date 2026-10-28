@@ -13,17 +13,37 @@
  */
 
 import { mockMedicalReports, MEDICAL_GLOSSARY } from '../data/reports';
+import api from './api';
 
-let inMemoryReports = [...mockMedicalReports];
+const getSavedLocalReports = () => {
+  try {
+    const raw = localStorage.getItem('mediverse_custom_reports');
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+let inMemoryReports = [...getSavedLocalReports(), ...mockMedicalReports];
 
 export const reportService = {
   /**
    * GET /api/reports
-   * Fetches all reports with optional filtering
+   * Fetches all reports with database retrieval and optional filtering
    */
   async getReports(filters = {}) {
-    // Simulating async network delay
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    try {
+      const dbRes = await api.get('/reports');
+      if (Array.isArray(dbRes.data) && dbRes.data.length > 0) {
+        // Merge db reports with unique ids
+        const existingIds = new Set(dbRes.data.map((r) => r.id));
+        const nonDuplicateMock = mockMedicalReports.filter((m) => !existingIds.has(m.id));
+        inMemoryReports = [...dbRes.data, ...nonDuplicateMock];
+      }
+    } catch (e) {
+      // Fallback to local memory / storage
+      inMemoryReports = [...getSavedLocalReports(), ...mockMedicalReports];
+    }
 
     let results = [...inMemoryReports];
 
@@ -118,6 +138,23 @@ export const reportService = {
     };
 
     inMemoryReports.unshift(newReport);
+    try {
+      const saved = getSavedLocalReports();
+      saved.unshift(newReport);
+      localStorage.setItem('mediverse_custom_reports', JSON.stringify(saved));
+      // Send to serverless API connected to Neon PostgreSQL
+      await api.post('/reports/upload', {
+        report_name: newReport.reportName,
+        report_type: newReport.reportType,
+        hospital: newReport.hospital,
+        doctor: newReport.doctor,
+        parameters: newReport.parameters,
+        structured_data: { findings: newReport.detailedFindings },
+        ai_explanation: newReport.aiExplanation,
+      });
+    } catch (e) {
+      console.warn('Report stored locally; backend sync note:', e.message);
+    }
     return newReport;
   },
 
