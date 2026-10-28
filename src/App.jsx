@@ -135,9 +135,21 @@ function RootRedirect() {
   return <Navigate to="/patient/dashboard" replace />;
 }
 
+import { initializeMobileApp } from './services/mobileNative';
+import { useNavigate } from 'react-router-dom';
+
+function MobileAppInitializer() {
+  const navigate = useNavigate();
+  React.useEffect(() => {
+    initializeMobileApp(navigate);
+  }, [navigate]);
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <MobileAppInitializer />
       <AuthProvider>
         <ElderModeProvider>
           <Routes>

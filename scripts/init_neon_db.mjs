@@ -192,6 +192,37 @@ async function init() {
   await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;`;
   console.log('[PASS] doctors table enhanced with scheduling and profile fields');
 
+  // 11. Create otps table
+  await sql`
+    CREATE TABLE IF NOT EXISTS otps (
+      id VARCHAR(64) PRIMARY KEY,
+      email VARCHAR(128) NOT NULL,
+      otp_code VARCHAR(16) NOT NULL,
+      purpose VARCHAR(32) NOT NULL DEFAULT 'PASSWORD_RESET',
+      attempts INT NOT NULL DEFAULT 0,
+      is_used BOOLEAN NOT NULL DEFAULT FALSE,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_otps_email_purpose ON otps(email, purpose);`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_otps_created_at ON otps(created_at);`;
+  console.log('[PASS] otps table verified');
+
+  // 12. Create device_tokens table
+  await sql`
+    CREATE TABLE IF NOT EXISTS device_tokens (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
+      token TEXT NOT NULL UNIQUE,
+      platform VARCHAR(32) NOT NULL DEFAULT 'android',
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);`;
+  console.log('[PASS] device_tokens table verified');
+
   console.log('=== NEON POSTGRESQL INITIALIZATION COMPLETE ===');
 }
 

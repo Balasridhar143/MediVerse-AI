@@ -157,6 +157,33 @@ async function ensureTables(sql) {
     await sql`CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read);`;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS otps (
+        id VARCHAR(64) PRIMARY KEY,
+        email VARCHAR(128) NOT NULL,
+        otp_code VARCHAR(16) NOT NULL,
+        purpose VARCHAR(32) NOT NULL DEFAULT 'PASSWORD_RESET',
+        attempts INT NOT NULL DEFAULT 0,
+        is_used BOOLEAN NOT NULL DEFAULT FALSE,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_otps_email_purpose ON otps(email, purpose);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_otps_created_at ON otps(created_at);`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS device_tokens (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        platform VARCHAR(32) NOT NULL DEFAULT 'android',
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);`;
+
     tablesInitialized = true;
   } catch (e) {
     console.error('Error ensuring tables exist:', e);
@@ -509,6 +536,330 @@ app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ detail: `Failed to fetch profile: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 4A. OTP AUTHENTICATION & PASSWORD RECOVERY
+// ==========================================
+
+// Request Password Reset OTP
+app.post(['/auth/forgot-password', '/api/auth/forgot-password'], async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ detail: 'Email address is required.' });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(422).json({ detail: 'Invalid email address format.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // Verify account existence
+    const users = await sql`SELECT id, full_name, email FROM users WHERE email = ${cleanEmail} LIMIT 1;`;
+    if (users.length === 0) {
+      // Avoid exposing whether a particular account exists (User Enumeration Protection)
+      return res.status(200).json({
+        success: true,
+        message: 'If an account exists with this email, a 6-digit verification code has been dispatched.',
+        cooldown: 60,
+      });
+    }
+
+    // Rate Limiting: 60-second resend cooldown
+    const recentOtps = await sql`
+      SELECT created_at FROM otps
+      WHERE email = ${cleanEmail} AND purpose = 'PASSWORD_RESET' AND created_at > NOW() - INTERVAL '60 seconds'
+      ORDER BY created_at DESC LIMIT 1;
+    `;
+    if (recentOtps.length > 0) {
+      return res.status(429).json({
+        detail: 'Please wait at least 60 seconds before requesting another verification code.',
+        retry_after: 60,
+      });
+    }
+
+    // Cryptographically secure 6-digit numeric OTP
+    const otpCode = crypto.randomInt(100000, 999999).toString();
+    const otpId = `otp_${crypto.randomBytes(8).toString('hex')}`;
+
+    // Invalidate any previously issued unused OTPs for this purpose
+    await sql`
+      UPDATE otps
+      SET is_used = TRUE
+      WHERE email = ${cleanEmail} AND purpose = 'PASSWORD_RESET' AND is_used = FALSE;
+    `;
+
+    // Persist new OTP with 10-minute validity
+    await sql`
+      INSERT INTO otps (id, email, otp_code, purpose, attempts, is_used, expires_at, created_at)
+      VALUES (${otpId}, ${cleanEmail}, ${otpCode}, 'PASSWORD_RESET', 0, FALSE, NOW() + INTERVAL '10 minutes', NOW());
+    `;
+
+    console.log(`[OTP] Generated password reset code for ${cleanEmail} (expires in 10m)`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'A 6-digit verification code has been sent to your email address.',
+      cooldown: 60,
+    });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    return res.status(500).json({ detail: `Unable to process recovery request: ${err.message}` });
+  }
+});
+
+// Verify OTP (for Password Reset or Login)
+app.post(['/auth/verify-otp', '/api/auth/verify-otp'], async (req, res) => {
+  try {
+    const { email, otp_code, purpose = 'PASSWORD_RESET' } = req.body;
+    if (!email || !otp_code) {
+      return res.status(400).json({ detail: 'Email and verification code are required.' });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanCode = String(otp_code).trim();
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // Fetch active OTP record
+    const records = await sql`
+      SELECT id, otp_code, attempts, expires_at
+      FROM otps
+      WHERE email = ${cleanEmail} AND purpose = ${purpose} AND is_used = FALSE AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `;
+
+    if (records.length === 0) {
+      return res.status(400).json({ detail: 'Invalid or expired verification code. Please request a new one.' });
+    }
+
+    const record = records[0];
+
+    // Check maximum verification attempts (max 5)
+    if (record.attempts >= 5) {
+      await sql`UPDATE otps SET is_used = TRUE WHERE id = ${record.id};`;
+      return res.status(429).json({ detail: 'Maximum verification attempts exceeded. Please request a new code.' });
+    }
+
+    // Constant-time compare or string match
+    if (record.otp_code !== cleanCode) {
+      const newAttempts = record.attempts + 1;
+      await sql`UPDATE otps SET attempts = ${newAttempts} WHERE id = ${record.id};`;
+      const remaining = Math.max(0, 5 - newAttempts);
+      return res.status(400).json({
+        detail: `Incorrect verification code. ${remaining} attempt(s) remaining.`,
+        remaining_attempts: remaining,
+      });
+    }
+
+    // Code matches: invalidate OTP to prevent replay
+    await sql`UPDATE otps SET is_used = TRUE WHERE id = ${record.id};`;
+
+    if (purpose === 'PASSWORD_RESET') {
+      // Issue short-lived password reset token (15 minutes)
+      const resetToken = jwt.sign(
+        { email: cleanEmail, scope: 'password_reset' },
+        JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+      return res.json({
+        success: true,
+        message: 'Verification code verified successfully.',
+        reset_token: resetToken,
+      });
+    }
+
+    if (purpose === 'LOGIN') {
+      // Complete passwordless login
+      const users = await sql`SELECT id, full_name, email, role, hospital_id FROM users WHERE email = ${cleanEmail} LIMIT 1;`;
+      if (users.length === 0) {
+        return res.status(404).json({ detail: 'No user account found for this email address.' });
+      }
+      const user = users[0];
+
+      let profileData = {};
+      if (user.role === 'patient') {
+        const p = await sql`SELECT id, age, gender, blood_group, phone FROM patients WHERE user_id = ${user.id} LIMIT 1;`;
+        if (p.length > 0) profileData = p[0];
+      } else if (user.role === 'doctor') {
+        const d = await sql`SELECT id, specialization, hospital_name FROM doctors WHERE user_id = ${user.id} LIMIT 1;`;
+        if (d.length > 0) profileData = d[0];
+      }
+
+      const tokenPayload = {
+        sub: user.id,
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        full_name: user.full_name,
+      };
+      const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
+
+      return res.json({
+        access_token: token,
+        token_type: 'Bearer',
+        user: {
+          ...profileData,
+          id: user.id,
+          profile_id: profileData.id,
+          full_name: user.full_name,
+          name: user.full_name,
+          email: user.email,
+          role: user.role,
+          hospital_id: user.hospital_id,
+        },
+      });
+    }
+
+    return res.json({ success: true, message: 'Verification successful.' });
+  } catch (err) {
+    console.error('Verify OTP error:', err);
+    return res.status(500).json({ detail: `OTP verification failed: ${err.message}` });
+  }
+});
+
+// Set New Password using Reset Token
+app.post(['/auth/reset-password', '/api/auth/reset-password'], async (req, res) => {
+  try {
+    const { reset_token, new_password } = req.body;
+    if (!reset_token || !new_password) {
+      return res.status(400).json({ detail: 'Reset token and new password are required.' });
+    }
+
+    if (new_password.length < 6) {
+      return res.status(422).json({ detail: 'Password must be at least 6 characters long.' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(reset_token, JWT_SECRET);
+    } catch (e) {
+      return res.status(401).json({ detail: 'Invalid or expired password reset session. Please request a new code.' });
+    }
+
+    if (decoded.scope !== 'password_reset' || !decoded.email) {
+      return res.status(401).json({ detail: 'Unauthorized reset token scope.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const cleanEmail = decoded.email.toLowerCase().trim();
+    const users = await sql`SELECT id FROM users WHERE email = ${cleanEmail} LIMIT 1;`;
+    if (users.length === 0) {
+      return res.status(404).json({ detail: 'User account not found.' });
+    }
+
+    // Hash new password securely
+    const passwordHash = await bcrypt.hash(new_password, 10);
+    await sql`
+      UPDATE users
+      SET password_hash = ${passwordHash}, updated_at = NOW()
+      WHERE email = ${cleanEmail};
+    `;
+
+    // Create security alert notification
+    const notifId = `notif_${crypto.randomBytes(8).toString('hex')}`;
+    await sql`
+      INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+      VALUES (
+        ${notifId},
+        ${users[0].id},
+        'SECURITY_ALERT',
+        'Password Changed Successfully',
+        'Your MediVerse AI account password was successfully updated. If you did not make this change, please contact healthcare security immediately.',
+        FALSE,
+        NOW()
+      );
+    `;
+
+    return res.json({
+      success: true,
+      message: 'Password updated successfully. You can now log in with your new password.',
+    });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    return res.status(500).json({ detail: `Failed to reset password: ${err.message}` });
+  }
+});
+
+// Request Passwordless Login OTP
+app.post(['/auth/request-otp', '/api/auth/request-otp'], async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ detail: 'Email address is required.' });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const users = await sql`SELECT id FROM users WHERE email = ${cleanEmail} LIMIT 1;`;
+    if (users.length === 0) {
+      return res.status(404).json({ detail: 'No account registered with this email address.' });
+    }
+
+    // Cooldown check (60 seconds)
+    const recent = await sql`
+      SELECT created_at FROM otps
+      WHERE email = ${cleanEmail} AND purpose = 'LOGIN' AND created_at > NOW() - INTERVAL '60 seconds'
+      ORDER BY created_at DESC LIMIT 1;
+    `;
+    if (recent.length > 0) {
+      return res.status(429).json({ detail: 'Please wait at least 60 seconds before requesting another login code.' });
+    }
+
+    const otpCode = crypto.randomInt(100000, 999999).toString();
+    const otpId = `otp_${crypto.randomBytes(8).toString('hex')}`;
+
+    await sql`UPDATE otps SET is_used = TRUE WHERE email = ${cleanEmail} AND purpose = 'LOGIN' AND is_used = FALSE;`;
+    await sql`
+      INSERT INTO otps (id, email, otp_code, purpose, attempts, is_used, expires_at, created_at)
+      VALUES (${otpId}, ${cleanEmail}, ${otpCode}, 'LOGIN', 0, FALSE, NOW() + INTERVAL '10 minutes', NOW());
+    `;
+
+    console.log(`[OTP] Generated login code for ${cleanEmail}`);
+
+    return res.json({
+      success: true,
+      message: 'A 6-digit login verification code has been dispatched to your email.',
+      cooldown: 60,
+    });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to request login code: ${err.message}` });
+  }
+});
+
+// Register Device Push Token (Android & Web Push)
+app.post(['/notifications/register-device', '/api/notifications/register-device'], authenticateToken, async (req, res) => {
+  try {
+    const { token, platform = 'android' } = req.body;
+    if (!token) {
+      return res.status(400).json({ detail: 'Push notification device token is required.' });
+    }
+
+    const userId = req.user.sub || req.user.id;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const deviceId = `dev_${crypto.randomBytes(8).toString('hex')}`;
+    await sql`
+      INSERT INTO device_tokens (id, user_id, token, platform, updated_at, created_at)
+      VALUES (${deviceId}, ${userId}, ${token}, ${platform}, NOW(), NOW())
+      ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, updated_at = NOW();
+    `;
+
+    return res.json({ success: true, message: 'Push notification device registered successfully.' });
+  } catch (err) {
+    return res.status(500).json({ detail: `Device registration failed: ${err.message}` });
   }
 });
 

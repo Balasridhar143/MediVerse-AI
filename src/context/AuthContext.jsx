@@ -105,6 +105,32 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
+   * Passwordless Login with One-Time Password
+   */
+  const loginWithOtp = async (email, otpCode) => {
+    try {
+      const backendResponse = await authService.loginWithOtp(email.trim(), otpCode.trim());
+      if (backendResponse && backendResponse.user && backendResponse.access_token) {
+        const authenticatedUser = {
+          ...backendResponse.user,
+          name: backendResponse.user.full_name,
+        };
+        setUser(authenticatedUser);
+        setToken(backendResponse.access_token);
+        localStorage.setItem('pulsecare_user', JSON.stringify(authenticatedUser));
+        localStorage.setItem('pulsecare_token', backendResponse.access_token);
+        localStorage.setItem('telehealth_user', JSON.stringify(authenticatedUser));
+        localStorage.setItem('telehealth_token', backendResponse.access_token);
+        return authenticatedUser;
+      }
+      throw new Error('Invalid OTP response from server.');
+    } catch (err) {
+      const errMsg = err.response?.data?.detail || err.message || 'OTP verification failed.';
+      throw new Error(errMsg);
+    }
+  };
+
+  /**
    * Real Server-Side User Registration
    * Communicates with FastAPI backend (/api/auth/register).
    */
@@ -169,6 +195,7 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated,
         loading,
         login,
+        loginWithOtp,
         register,
         logout,
       }}

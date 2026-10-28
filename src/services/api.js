@@ -3,11 +3,17 @@ import { mockPrescriptions, mockMedicines } from '../data/mockData';
 import { mockPatientAllergies, runPrescriptionSafetyCheck } from '../data/medicineSafetyData';
 import { verifiedMedicineDatabase } from '../data/verifiedMedicineDatabase';
 
-// Base API configuration for Mediverse API (relative '/api' on production domain)
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api';
+// Base API configuration for Mediverse API:
+// When running inside Android Capacitor APK, connects to production backend https://mediverse-ai-fawn.vercel.app/api
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined' && window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
+    return 'https://mediverse-ai-fawn.vercel.app/api';
+  }
+  return import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api';
+};
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -57,6 +63,31 @@ export const authService = {
 
   async getCurrentUser() {
     const response = await api.get('/auth/me');
+    return response.data;
+  },
+
+  async forgotPassword(email) {
+    const response = await api.post('/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  async verifyOtp(email, otp_code, purpose = 'PASSWORD_RESET') {
+    const response = await api.post('/auth/verify-otp', { email, otp_code, purpose });
+    return response.data;
+  },
+
+  async resetPassword(reset_token, new_password) {
+    const response = await api.post('/auth/reset-password', { reset_token, new_password });
+    return response.data;
+  },
+
+  async requestOtp(email) {
+    const response = await api.post('/auth/request-otp', { email });
+    return response.data;
+  },
+
+  async loginWithOtp(email, otp_code) {
+    const response = await api.post('/auth/verify-otp', { email, otp_code, purpose: 'LOGIN' });
     return response.data;
   },
 };
@@ -562,6 +593,11 @@ export const notificationService = {
 
   async markAllAsRead() {
     const res = await api.patch('/notifications/read-all');
+    return res.data;
+  },
+
+  async registerDeviceToken(token, platform = 'android') {
+    const res = await api.post('/notifications/register-device', { token, platform });
     return res.data;
   },
 };

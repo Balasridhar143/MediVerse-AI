@@ -29,3 +29,9 @@ backend/uploads/*
 
 .agents/
 skills-lock.json
+
+jdk-17/
+android-sdk/
+.gradle/
+*.apk
+*.zip
