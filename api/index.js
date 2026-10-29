@@ -4,7 +4,7 @@ import { neon } from '@neondatabase/serverless';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS } from './datasets.js';
+import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS, CLINICAL_MEDICINES as DATASET_MEDICINES } from './datasets.js';
 import { sendOtpEmail } from './email.js';
 
 const app = express();
@@ -2235,155 +2235,7 @@ app.post(['/consultation/room/:appointment_id/end', '/api/consultation/room/:app
 // ==========================================
 // 13. MEDICINES, HOSPITALS, AND GLOBAL SEARCH
 // ==========================================
-const CLINICAL_MEDICINES = [
-  {
-    id: "med_aug_625",
-    brand_name: "Augmentin 625 Duo Tablet",
-    generic_name: "Amoxicillin and Potassium Clavulanate",
-    composition: "Amoxicillin 500mg + Clavulanic Acid 125mg",
-    formulation: "Film-Coated Tablet",
-    strength: "625 mg",
-    manufacturer: "GlaxoSmithKline Pharmaceuticals Ltd",
-    price: 204.50,
-    therapeutic_class: "Broad-Spectrum Penicillin Antibiotic with Beta-Lactamase Inhibitor",
-    category: "Antibiotics & Anti-Infectives",
-    schedule: "Schedule H1 Prescription Only",
-    indications: ["Lower Respiratory Tract Infections", "Acute Bacterial Sinusitis", "Otitis Media", "Urinary Tract Infections", "Skin and Soft Tissue Infections"],
-    contraindications: ["Known hypersensitivity to penicillins or beta-lactams", "History of amoxicillin/clavulanate-associated cholestatic jaundice/hepatic impairment"],
-    precautions: "Monitor hepatic function in prolonged therapy. Adjust dose in renal impairment (GFR < 30 mL/min). Discontinue if rash occurs.",
-    side_effects: {
-      common: ["Mild diarrhea", "Nausea", "Loose stools", "Vomiting", "Abdominal discomfort"],
-      serious: ["Anaphylaxis / Angioedema", "Clostridioides difficile-associated pseudomembranous colitis", "Cholestatic jaundice", "Stevens-Johnson syndrome"]
-    },
-    storage: "Store in a cool dry place below 25°C. Protect from moisture."
-  },
-  {
-    id: "med_tel_40",
-    brand_name: "Telma 40 Tablet",
-    generic_name: "Telmisartan",
-    composition: "Telmisartan 40mg",
-    formulation: "Tablet",
-    strength: "40 mg",
-    manufacturer: "Glenmark Pharmaceuticals Ltd",
-    price: 142.00,
-    therapeutic_class: "Angiotensin II Receptor Blocker (ARB) Antihypertensive",
-    category: "Cardiovascular & Antihypertensive",
-    schedule: "Schedule H",
-    indications: ["Essential Hypertension", "Cardiovascular Risk Reduction in High-Risk Patients"],
-    contraindications: ["Pregnancy (boxed fetotoxicity warning)", "Biliary obstructive disorders", "Severe hepatic impairment"],
-    precautions: "Monitor serum potassium and renal function periodically. Avoid potassium supplements unless clinically directed.",
-    side_effects: {
-      common: ["Mild dizziness", "Fatigue", "Sinusitis", "Back pain", "Diarrhea"],
-      serious: ["Hyperkalemia", "Hypotension / Syncope", "Acute renal impairment in bilateral renal artery stenosis", "Angioedema"]
-    },
-    storage: "Store in original blister package below 30°C. Protect from light."
-  },
-  {
-    id: "med_met_500",
-    brand_name: "Glycomet 500 SR Tablet",
-    generic_name: "Metformin Hydrochloride",
-    composition: "Metformin HCl 500mg (Sustained Release)",
-    formulation: "Sustained-Release Tablet",
-    strength: "500 mg",
-    manufacturer: "USV Private Limited",
-    price: 48.00,
-    therapeutic_class: "Biguanide Oral Antidiabetic Agent",
-    category: "Endocrinology & Diabetes",
-    schedule: "Schedule H",
-    indications: ["Type 2 Diabetes Mellitus glycemic control as monotherapy or adjunct to diet/exercise"],
-    contraindications: ["Severe renal impairment (eGFR < 30 mL/min/1.73m²)", "Acute or chronic metabolic acidosis", "Severe hypoxemia / sepsis"],
-    precautions: "Risk of lactic acidosis. Withhold during iodinated radiocontrast procedures and surgery.",
-    side_effects: {
-      common: ["Gastrointestinal upset", "Nausea", "Metallic taste", "Flatulence", "Vitamin B12 deficiency on prolonged therapy"],
-      serious: ["Lactic acidosis", "Severe hypoglycemia when combined with sulfonylureas or insulin"]
-    },
-    storage: "Store below 25°C in dry conditions."
-  },
-  {
-    id: "med_pan_40",
-    brand_name: "Pan 40 Tablet",
-    generic_name: "Pantoprazole Sodium",
-    composition: "Pantoprazole Sodium Gastro-resistant 40mg",
-    formulation: "Enteric-Coated Tablet",
-    strength: "40 mg",
-    manufacturer: "Alkem Laboratories Ltd",
-    price: 155.00,
-    therapeutic_class: "Proton Pump Inhibitor (PPI) Antisecretory",
-    category: "Gastroenterology",
-    schedule: "Schedule H",
-    indications: ["Gastroesophageal Reflux Disease (GERD)", "Peptic Ulcer Disease", "Zollinger-Ellison Syndrome", "NSAID-induced ulcer prophylaxis"],
-    contraindications: ["Hypersensitivity to pantoprazole or substituted benzimidazoles"],
-    precautions: "Take 30 to 60 minutes before morning meal. Swallow whole without crushing.",
-    side_effects: {
-      common: ["Headache", "Abdominal pain", "Constipation", "Flatulence", "Dry mouth"],
-      serious: ["Clostridioides difficile diarrhea", "Bone fracture", "Severe hypomagnesemia"]
-    },
-    storage: "Store in a cool place protected from moisture."
-  },
-  {
-    id: "med_azi_500",
-    brand_name: "Azee 500 Tablet",
-    generic_name: "Azithromycin",
-    composition: "Azithromycin Dihydrate 500mg",
-    formulation: "Film-Coated Tablet",
-    strength: "500 mg",
-    manufacturer: "Cipla Ltd",
-    price: 130.00,
-    therapeutic_class: "Macrolide Azalide Antibiotic",
-    category: "Antibiotics & Anti-Infectives",
-    schedule: "Schedule H1",
-    indications: ["Community-Acquired Pneumonia", "Acute Bacterial Sinusitis", "Streptococcal Pharyngitis", "Urethritis / Cervicitis"],
-    contraindications: ["History of cholestatic jaundice or hepatic dysfunction with prior azithromycin use", "Hypersensitivity to macrolides"],
-    precautions: "QT interval prolongation risk. Use caution in patients with proarrhythmic conditions or hypokalemia.",
-    side_effects: {
-      common: ["Nausea", "Abdominal cramping", "Loose stools", "Vomiting", "Mild headache"],
-      serious: ["QT prolongation / Torsades de pointes", "Severe hepatotoxicity", "Clostridioides difficile colitis"]
-    },
-    storage: "Store protected from moisture and excessive heat."
-  },
-  {
-    id: "med_pcm_650",
-    brand_name: "Dolo 650 Tablet",
-    generic_name: "Paracetamol",
-    composition: "Paracetamol (Acetaminophen) 650mg",
-    formulation: "Tablet",
-    strength: "650 mg",
-    manufacturer: "Micro Labs Ltd",
-    price: 33.50,
-    therapeutic_class: "Analgesic and Antipyretic Agent",
-    category: "General Medicine & Pain",
-    schedule: "OTC / Schedule H",
-    indications: ["Pyrexia / Fever reduction", "Mild to moderate pain relief (headache, body ache, dental pain, arthralgia)"],
-    contraindications: ["Severe active hepatic failure or acute liver disease", "Hypersensitivity to paracetamol"],
-    precautions: "Do not exceed maximum daily dose of 4,000 mg in adults to prevent acute hepatotoxicity.",
-    side_effects: {
-      common: ["Rare at therapeutic doses; mild nausea", "Mild dyspepsia"],
-      serious: ["Acute liver failure in overdose", "Severe cutaneous adverse reactions"]
-    },
-    storage: "Store at room temperature below 30°C."
-  },
-  {
-    id: "med_all_120",
-    brand_name: "Allegra 120mg Tablet",
-    generic_name: "Fexofenadine Hydrochloride",
-    composition: "Fexofenadine HCl 120mg",
-    formulation: "Film-Coated Tablet",
-    strength: "120 mg",
-    manufacturer: "Sanofi India Limited",
-    price: 218.00,
-    therapeutic_class: "Second-Generation Non-Sedating Antihistamine",
-    category: "Allergy & Pulmonology",
-    schedule: "Schedule H",
-    indications: ["Seasonal Allergic Rhinitis (sneezing, rhinorrhea, itchy/watery eyes)", "Chronic Idiopathic Urticaria"],
-    contraindications: ["Hypersensitivity to fexofenadine or formulation components"],
-    precautions: "Avoid taking with fruit juices (grapefruit, apple, orange) as they decrease absorption significantly.",
-    side_effects: {
-      common: ["Mild drowsiness (rare)", "Headache", "Nausea", "Dizziness", "Dyspepsia"],
-      serious: ["Severe allergic hypersensitivity / bronchospasm"]
-    },
-    storage: "Store at room temperature protected from direct sunlight."
-  }
-];
+const CLINICAL_MEDICINES = DATASET_MEDICINES;
 
 const CLINICAL_HOSPITALS = DATASET_HOSPITALS;
 
@@ -2468,13 +2320,22 @@ app.get(['/hospitals', '/api/hospitals'], (req, res) => {
   const cleanQ = (typeof q === 'string' ? q : '').toLowerCase().trim();
   const cleanState = (typeof state === 'string' ? state : '').toLowerCase().trim();
   const cleanDist = (typeof district === 'string' ? district : '').toLowerCase().trim();
+  const cleanType = (typeof facility_type === 'string' ? facility_type : '').toLowerCase().trim();
 
   let matches = CLINICAL_HOSPITALS.filter((h) => {
-    const text = `${h.hospital_name} ${h.city} ${h.district} ${h.state} ${h.departments}`.toLowerCase();
+    const text = `${h.hospital_name} ${h.city} ${h.district} ${h.state} ${h.departments} ${h.facility_type}`.toLowerCase();
     const matchQ = !cleanQ || text.includes(cleanQ);
-    const matchState = !cleanState || cleanState === 'all states' || h.state.toLowerCase() === cleanState;
-    const matchDist = !cleanDist || cleanDist === 'all districts' || h.district.toLowerCase() === cleanDist;
-    return matchQ && matchState && matchDist;
+    const matchState = !cleanState || cleanState === 'all states' || 
+      h.state.toLowerCase() === cleanState ||
+      (cleanState.includes('tamil') && h.state.toLowerCase().includes('tamil'));
+    const matchDist = !cleanDist || cleanDist === 'all districts' || 
+      h.district.toLowerCase() === cleanDist ||
+      h.district.toLowerCase().includes(cleanDist) ||
+      cleanDist.includes(h.district.toLowerCase());
+    const matchType = !cleanType || cleanType === 'all facilities' ||
+      h.facility_type.toLowerCase().includes(cleanType) ||
+      cleanType.includes(h.facility_type.toLowerCase());
+    return matchQ && matchState && matchDist && matchType;
   });
 
   const p = parseInt(page, 10) || 1;
@@ -2542,12 +2403,14 @@ app.get(['/facilities/filters', '/api/facilities/filters'], (req, res) => {
   const states = LOCATION_REGISTRY.all_states || Array.from(new Set(CLINICAL_HOSPITALS.map((h) => h.state))).sort();
   const types = [
     'All Facilities',
-    'Community Health Centre (CHC)',
-    'Primary Health Centre (PHC)',
+    'Hospital',
     'Multispeciality Hospital',
     'Super Speciality Hospital',
+    'Clinic / Consultation Centre',
+    'Community Health Centre',
+    'Community Health Centre (CHC)',
+    'Primary Health Centre (PHC)',
     'Apex Autonomous Medical Institute',
-    'Hospital',
   ];
   return res.json({ states, facility_types: types });
 });
