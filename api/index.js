@@ -216,6 +216,10 @@ const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(401).json({ detail: 'Invalid or expired session token.' });
     }
+    if (decoded) {
+      if (!decoded.id && decoded.sub) decoded.id = decoded.sub;
+      if (!decoded.sub && decoded.id) decoded.sub = decoded.id;
+    }
     req.user = decoded;
     next();
   });
@@ -411,12 +415,39 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
       };
       if (demoAccounts[cleanEmail] && password === 'password123') {
         const demo = demoAccounts[cleanEmail];
-        const token = jwt.sign({ sub: `demo_${cleanEmail}`, email: cleanEmail, role: demo.role }, JWT_SECRET, { expiresIn: '7d' });
+        const demoUserId = cleanEmail === 'doctor@example.com' ? 'usr_doc_001' : cleanEmail === 'admin@example.com' ? 'usr_adm_001' : 'usr_pat_001';
+
+        // Ensure user exists in users table so appointments foreign keys succeed
+        try {
+          const passHash = await bcrypt.hash('password123', 10);
+          await sql`
+            INSERT INTO users (id, full_name, email, password_hash, role, hospital_id, created_at, updated_at)
+            VALUES (${demoUserId}, ${demo.name}, ${cleanEmail}, ${passHash}, ${demo.role}, ${demo.hospital_id || null}, NOW(), NOW())
+            ON CONFLICT (id) DO UPDATE SET full_name = ${demo.name}, role = ${demo.role};
+          `;
+          if (demo.role === 'patient') {
+            await sql`
+              INSERT INTO patients (id, user_id, full_name, phone, created_at)
+              VALUES (${'pat_' + demoUserId}, ${demoUserId}, ${demo.name}, '+91 98765 43210', NOW())
+              ON CONFLICT (id) DO NOTHING;
+            `;
+          } else if (demo.role === 'doctor') {
+            await sql`
+              INSERT INTO doctors (id, user_id, full_name, specialization, hospital_name, is_verified, created_at)
+              VALUES (${'doc_' + demoUserId}, ${demoUserId}, ${demo.name}, 'Cardiology & Internal Medicine', 'City Care Multispeciality Hospital', TRUE, NOW())
+              ON CONFLICT (id) DO NOTHING;
+            `;
+          }
+        } catch (e) {
+          console.warn('Demo seeding notice:', e.message);
+        }
+
+        const token = jwt.sign({ id: demoUserId, sub: demoUserId, email: cleanEmail, role: demo.role }, JWT_SECRET, { expiresIn: '7d' });
         return res.json({
           access_token: token,
           token_type: 'Bearer',
           user: {
-            id: `demo_${cleanEmail}`,
+            id: demoUserId,
             full_name: demo.name,
             name: demo.name,
             email: cleanEmail,
@@ -1996,12 +2027,13 @@ app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:
 
     const sigStr = typeof sigData === 'object' ? JSON.stringify(sigData) : String(sigData || '');
     const sigId = `sig_${crypto.randomBytes(6).toString('hex')}`;
-    const userRole = req.user.id === apt.patient_id ? 'patient' : 'doctor';
+    const senderId = req.user.id || req.user.sub || 'usr_pat_001';
+    const userRole = (req.user.id === apt.patient_id || req.user.role === 'patient') ? 'patient' : 'doctor';
     const roomId = `room_${apt.id}`;
 
     await sql`
       INSERT INTO consultation_signals (id, room_id, sender_id, sender_role, signal_type, signal_data, created_at)
-      VALUES (${sigId}, ${roomId}, ${req.user.id}, ${userRole}, ${sigType}, ${sigStr}, NOW());
+      VALUES (${sigId}, ${roomId}, ${senderId}, ${userRole}, ${sigType}, ${sigStr}, NOW());
     `;
 
     return res.json({ success: true, signal_id: sigId });
