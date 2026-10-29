@@ -4,6 +4,7 @@ import { neon } from '@neondatabase/serverless';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS } from './datasets.js';
 
 const app = express();
 
@@ -2326,122 +2327,7 @@ const CLINICAL_MEDICINES = [
   }
 ];
 
-const CLINICAL_HOSPITALS = [
-  {
-    id: "hosp_1",
-    hospital_name: "City Care Multispeciality Hospital",
-    facility_type: "Multispeciality Hospital",
-    ownership_type: "Private Trust",
-    address: "42 Healthcare Avenue, Indiranagar",
-    city: "Bengaluru",
-    district: "Bengaluru Urban",
-    state: "Karnataka",
-    postal_code: "560038",
-    phone: "+91 80 4123 4567",
-    emergency_phone: "108",
-    latitude: 12.9716,
-    longitude: 77.5946,
-    departments: "Cardiology, Neurology, Emergency, Pediatrics",
-    available_doctors: 24,
-    emergency_availability: "24x7 Critical Care Active",
-    source: "Verified Regional Healthcare Registry"
-  },
-  {
-    id: "hosp_aiims_delhi",
-    hospital_name: "All India Institute of Medical Sciences (AIIMS)",
-    facility_type: "Apex Autonomous Medical Institute",
-    ownership_type: "Public",
-    address: "Ansari Nagar East, Ring Road",
-    city: "New Delhi",
-    district: "New Delhi",
-    state: "Delhi",
-    postal_code: "110029",
-    phone: "+91 11 2658 8500",
-    emergency_phone: "108",
-    latitude: 28.5672,
-    longitude: 77.2100,
-    departments: "Cardiology, Oncology, Neurology, Emergency, Nephrology",
-    available_doctors: 120,
-    emergency_availability: "24x7 Apex Trauma Centre Active",
-    source: "Ministry of Health & Family Welfare, Govt of India"
-  },
-  {
-    id: "hosp_fortis_delhi",
-    hospital_name: "Fortis Hospital Vasant Kunj",
-    facility_type: "Super Speciality Hospital",
-    ownership_type: "Private",
-    address: "Sector B, Pocket 1, Aruna Asaf Ali Marg, Vasant Kunj",
-    city: "New Delhi",
-    district: "South Delhi",
-    state: "Delhi",
-    postal_code: "110070",
-    phone: "+91 11 4277 6222",
-    emergency_phone: "108",
-    latitude: 28.5284,
-    longitude: 77.1518,
-    departments: "Cardiology, Oncology, Orthopedics, Critical Care",
-    available_doctors: 45,
-    emergency_availability: "24x7 Critical Care Unit Active",
-    source: "Verified Healthcare Registry"
-  },
-  {
-    id: "hosp_max_saket",
-    hospital_name: "Max Super Speciality Hospital Saket",
-    facility_type: "Super Speciality Hospital",
-    ownership_type: "Private",
-    address: "1 2 Press Enclave Marg Saket",
-    city: "New Delhi",
-    district: "South Delhi",
-    state: "Delhi",
-    postal_code: "110017",
-    phone: "+91 11 2651 5050",
-    emergency_phone: "108",
-    latitude: 28.5273,
-    longitude: 77.2140,
-    departments: "Neurology, Cardiac Sciences, Orthopedics, Pulmonology",
-    available_doctors: 28,
-    emergency_availability: "24x7 Critical Care Active",
-    source: "Verified Healthcare Registry"
-  },
-  {
-    id: "hosp_apollo_chennai",
-    hospital_name: "Apollo Hospital Greams Road",
-    facility_type: "Multispeciality Hospital",
-    ownership_type: "Private",
-    address: "21 Greams Lane, Thousand Lights",
-    city: "Chennai",
-    district: "Chennai",
-    state: "Tamil Nadu",
-    postal_code: "600006",
-    phone: "+91 44 2829 0200",
-    emergency_phone: "108",
-    latitude: 13.0604,
-    longitude: 80.2496,
-    departments: "Cardiology, Cardiothoracic Surgery, Oncology, Transplants",
-    available_doctors: 65,
-    emergency_availability: "24x7 Comprehensive Emergency Active",
-    source: "NABH Accredited Healthcare Registry"
-  },
-  {
-    id: "hosp_baptist_blr",
-    hospital_name: "Bangalore Baptist Hospital",
-    facility_type: "Hospital",
-    ownership_type: "Public / Trust",
-    address: "Bellary Road, Hebbal",
-    city: "Bengaluru",
-    district: "Bengaluru Urban",
-    state: "Karnataka",
-    postal_code: "560024",
-    phone: "+91 80 2202 4700",
-    emergency_phone: "108",
-    latitude: 13.0358,
-    longitude: 77.5891,
-    departments: "Emergency, Critical Care, Cardiology, Surgery",
-    available_doctors: 30,
-    emergency_availability: "24x7 Emergency Unit Active",
-    source: "OpenStreetMap Contributors / HOTOSM"
-  }
-];
+const CLINICAL_HOSPITALS = DATASET_HOSPITALS;
 
 app.get(['/medicines', '/api/medicines'], (req, res) => {
   const { q = '', category = '', formulation = '', page = 1, limit = 20 } = req.query;
@@ -2547,17 +2433,261 @@ app.get(['/hospitals', '/api/hospitals'], (req, res) => {
   });
 });
 
+app.get(['/datasets/statistics', '/api/datasets/statistics', '/facilities/statistics', '/api/facilities/statistics'], (req, res) => {
+  return res.json(VERIFIED_STATISTICS);
+});
+
+app.get(['/hospitals/nearby', '/api/hospitals/nearby'], (req, res) => {
+  const lat = parseFloat(req.query.latitude);
+  const lon = parseFloat(req.query.longitude);
+  const radiusKm = parseFloat(req.query.radius_km) || 50;
+  const limit = parseInt(req.query.limit, 10) || 20;
+
+  if (isNaN(lat) || isNaN(lon)) {
+    return res.status(400).json({ detail: 'Valid latitude and longitude are required.' });
+  }
+
+  const rEarth = 6371.0;
+  const nearby = [];
+  for (const h of CLINICAL_HOSPITALS) {
+    if (!h.latitude || !h.longitude) continue;
+    const dLat = (h.latitude - lat) * (Math.PI / 180);
+    const dLon = (h.longitude - lon) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat * (Math.PI / 180)) * Math.cos(h.latitude * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = Math.round(rEarth * c * 100) / 100;
+    if (distance <= radiusKm) {
+      nearby.push({ ...h, distance_km: distance });
+    }
+  }
+  nearby.sort((a, b) => a.distance_km - b.distance_km);
+  return res.json(nearby.slice(0, limit));
+});
+
 app.get(['/hospitals/districts', '/api/hospitals/districts'], (req, res) => {
   const { state = '' } = req.query;
+  const stateKey = Object.keys(LOCATION_REGISTRY.districts_by_state || {}).find(
+    (s) => s.toLowerCase() === state.toLowerCase()
+  );
+  if (stateKey && LOCATION_REGISTRY.districts_by_state[stateKey]) {
+    return res.json({ state, districts: LOCATION_REGISTRY.districts_by_state[stateKey] });
+  }
   const matched = CLINICAL_HOSPITALS.filter((h) => h.state.toLowerCase() === state.toLowerCase());
   const dists = Array.from(new Set(matched.map((h) => h.district).filter(Boolean)));
   return res.json({ state, districts: dists.length > 0 ? dists : ['Central', 'North', 'South'] });
 });
 
 app.get(['/facilities/filters', '/api/facilities/filters'], (req, res) => {
-  const states = Array.from(new Set(CLINICAL_HOSPITALS.map((h) => h.state))).sort();
-  const types = ['All Facilities', 'Multispeciality Hospital', 'Super Speciality Hospital', 'Apex Autonomous Medical Institute', 'Hospital'];
+  const states = LOCATION_REGISTRY.all_states || Array.from(new Set(CLINICAL_HOSPITALS.map((h) => h.state))).sort();
+  const types = [
+    'All Facilities',
+    'Community Health Centre (CHC)',
+    'Primary Health Centre (PHC)',
+    'Multispeciality Hospital',
+    'Super Speciality Hospital',
+    'Apex Autonomous Medical Institute',
+    'Hospital',
+  ];
   return res.json({ states, facility_types: types });
+});
+
+app.get(['/hospitals/:hospitalId/registrations', '/api/hospitals/:hospitalId/registrations'], authenticateToken, async (req, res) => {
+  try {
+    const { hospitalId } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+    const regs = await sql`
+      SELECT id, hospital_id, hospital_name, full_name, phone, reason_for_visit, department, status, registration_date, created_at
+      FROM patient_registrations
+      WHERE hospital_id = ${hospitalId}
+      ORDER BY created_at DESC;
+    `;
+    return res.json(regs);
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to fetch hospital registrations: ${err.message}` });
+  }
+});
+
+app.get(['/hospitals/:id', '/api/hospitals/:id'], (req, res) => {
+  const hosp = CLINICAL_HOSPITALS.find((h) => h.id === req.params.id);
+  if (!hosp) {
+    return res.status(404).json({ detail: `Hospital with ID '${req.params.id}' not found.` });
+  }
+  return res.json(hosp);
+});
+
+app.patch(['/registrations/:registrationId/status', '/api/registrations/:registrationId/status'], authenticateToken, async (req, res) => {
+  try {
+    const { registrationId } = req.params;
+    const { status: newStatus } = req.body;
+    const sql = getDb();
+    await ensureTables(sql);
+    const updated = await sql`
+      UPDATE patient_registrations
+      SET status = ${newStatus}
+      WHERE id = ${registrationId}
+      RETURNING *;
+    `;
+    if (updated.length === 0) {
+      return res.status(404).json({ detail: `Registration '${registrationId}' not found.` });
+    }
+    return res.json(updated[0]);
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to update registration status: ${err.message}` });
+  }
+});
+
+// Prescriptions & Drug Safety
+const MOCK_PRESCRIPTIONS = [
+  {
+    id: 'rx_501',
+    prescriptionId: 'RX-2026-501',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Arun Kumar',
+    doctorId: 'D001',
+    department: 'Cardiology & Internal Medicine',
+    hospital: 'City Hospital Multispeciality',
+    date: '28 Aug 2026',
+    dateIso: '2026-08-28',
+    diagnosis: 'Stage 1 Essential Hypertension & Borderline Mixed Dyslipidemia',
+    status: 'Active',
+    safetyChecked: true,
+    safetyNotes: 'Automated pharmacovigilance verified: Zero penicillin molecules, no ACE/ARB duplicate, normal renal clearance.',
+    medicines: [
+      {
+        name: 'Telmisartan',
+        dosage: '40 mg',
+        frequency: 'Once daily (1-0-0)',
+        timing: 'Morning',
+        duration: '30 days',
+        instructions: 'Take 1 tablet with water after morning breakfast. Check BP weekly.',
+      },
+      {
+        name: 'Atorvastatin',
+        dosage: '10 mg',
+        frequency: 'Once daily (0-0-1)',
+        timing: 'Night',
+        duration: '30 days',
+        instructions: 'Take 1 tablet at bedtime after dinner. Avoid grapefruit juice.',
+      },
+    ],
+    doctorSignature: 'Verified (Dr. Arun Kumar, Reg: MCI-45291)',
+  },
+  {
+    id: 'rx_502',
+    prescriptionId: 'RX-2026-502',
+    patientId: 'P001',
+    patientName: 'Rahul Sharma',
+    doctorName: 'Dr. Sunita Deshmukh',
+    doctorId: 'D003',
+    department: 'General & Preventive Medicine',
+    hospital: 'Metro General Healthcare',
+    date: '15 Aug 2026',
+    dateIso: '2026-08-15',
+    diagnosis: 'Impaired Fasting Glycemia (Pre-diabetes)',
+    status: 'Active',
+    safetyChecked: true,
+    safetyNotes: 'Contrast media warning acknowledged: pause 48h prior to elective iodinated imaging.',
+    medicines: [
+      {
+        name: 'Metformin Hydrochloride',
+        dosage: '500 mg',
+        frequency: 'Twice daily (1-0-1)',
+        timing: 'Morning & Night',
+        duration: '60 days',
+        instructions: 'Take with or immediately after meals to reduce stomach discomfort.',
+      },
+    ],
+    doctorSignature: 'Verified (Dr. Sunita Deshmukh, Reg: DNB-88120)',
+  },
+];
+
+app.get(['/prescriptions', '/api/prescriptions'], (req, res) => {
+  return res.json(MOCK_PRESCRIPTIONS);
+});
+
+app.get(['/prescriptions/:id', '/api/prescriptions/:id'], (req, res) => {
+  const rx = MOCK_PRESCRIPTIONS.find((p) => p.id === req.params.id || p.prescriptionId === req.params.id);
+  if (!rx) return res.status(404).json({ detail: 'Prescription not found' });
+  return res.json(rx);
+});
+
+app.post(['/prescriptions', '/api/prescriptions'], (req, res) => {
+  const newRx = {
+    id: `rx_${Date.now()}`,
+    prescriptionId: `RX-2026-${Math.floor(100 + Math.random() * 900)}`,
+    ...req.body,
+    date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+    dateIso: new Date().toISOString().split('T')[0],
+    status: 'Active',
+    safetyChecked: true,
+  };
+  MOCK_PRESCRIPTIONS.unshift(newRx);
+  return res.status(201).json(newRx);
+});
+
+app.post(['/prescriptions/safety-check', '/api/prescriptions/safety-check'], (req, res) => {
+  const { medicines = [], patient_allergies = [] } = req.body;
+  const alerts = [];
+  const medNames = medicines.map((m) => (typeof m === 'string' ? m : m.name || '').toLowerCase());
+
+  const hasPenicillinAllergy = patient_allergies.some((a) => (typeof a === 'string' ? a : a.allergen || '').toLowerCase().includes('penicillin'));
+  if (hasPenicillinAllergy) {
+    medNames.forEach((name) => {
+      if (name.includes('amox') || name.includes('penicillin') || name.includes('ampicillin') || name.includes('augmentin')) {
+        alerts.push({
+          severity: 'High',
+          type: 'Allergy Contraindication',
+          message: `CRITICAL ALLERGY ALERT: Patient has documented Penicillin hypersensitivity. '${name}' is strictly contraindicated.`,
+        });
+      }
+    });
+  }
+
+  const hasStatin = medNames.some((m) => m.includes('statin'));
+  const hasFibrate = medNames.some((m) => m.includes('fibrate') || m.includes('gemfibrozil'));
+  if (hasStatin && hasFibrate) {
+    alerts.push({
+      severity: 'Moderate',
+      type: 'Drug-Drug Interaction',
+      message: 'Co-administration of Statins with Fibrates increases the risk of severe rhabdomyolysis and myopathy.',
+    });
+  }
+
+  return res.json({
+    safe: alerts.filter((a) => a.severity === 'High').length === 0,
+    alerts,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get(['/patients/:patientId/allergies', '/api/patients/:patientId/allergies'], (req, res) => {
+  return res.json([
+    {
+      id: 'alg_01',
+      allergyId: 'ALG-2021-01',
+      patientId: req.params.patientId,
+      allergen: 'Penicillin / Beta-Lactam Antibiotics',
+      category: 'Drug Allergy',
+      reactionType: 'Type I Hypersensitivity',
+      severity: 'Critical / Strict Contraindication',
+      status: 'Active Alert',
+    },
+    {
+      id: 'alg_02',
+      allergyId: 'ALG-2024-02',
+      patientId: req.params.patientId,
+      allergen: 'Iodinated Radiographic Contrast Media',
+      category: 'Contrast Reaction Alert',
+      reactionType: 'Metabolic & Renal Clearance Precaution',
+      severity: 'Moderate Precaution',
+      status: 'Active Advisory',
+    },
+  ]);
 });
 
 app.get(['/search', '/api/search'], async (req, res) => {
