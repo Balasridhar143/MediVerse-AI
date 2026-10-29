@@ -36,15 +36,23 @@ export default function Consultation() {
         const list = Array.isArray(data) ? data : [];
         setAppointments(list);
 
-        // If no appointmentId in URL, default to first confirmed or upcoming video appointment
-        if (!urlAppointmentId && list.length > 0) {
-          const active = list.find(
-            (a) => (a.status === 'CONFIRMED' || a.status === 'UPCOMING') && a.type === 'Video Consultation'
-          ) || list[0];
-          if (active) {
-            setSelectedAppointmentId(active.id);
-            setSearchParams({ appointmentId: active.id }, { replace: true });
+        // If no appointmentId in URL, default to first confirmed or upcoming video appointment, or apt_101
+        if (!urlAppointmentId) {
+          if (list.length > 0) {
+            const active = list.find(
+              (a) => (a.status === 'CONFIRMED' || a.status === 'UPCOMING') && a.type === 'Video Consultation'
+            ) || list[0];
+            if (active) {
+              setSelectedAppointmentId(active.id);
+              setSearchParams({ appointmentId: active.id }, { replace: true });
+            }
+          } else {
+            // Default to verified demo room apt_101
+            setSelectedAppointmentId('apt_101');
+            setSearchParams({ appointmentId: 'apt_101' }, { replace: true });
           }
+        } else {
+          setSelectedAppointmentId(urlAppointmentId);
         }
       } catch (err) {
         console.warn('Could not fetch patient appointments:', err);
@@ -84,19 +92,27 @@ export default function Consultation() {
           <Loader2 className="w-8 h-8 text-teal-600 animate-spin mx-auto mb-3" />
           <p className="font-semibold text-slate-700">Loading Telemedicine Roster...</p>
         </Card>
-      ) : appointments.length === 0 ? (
+      ) : appointments.length === 0 && !selectedAppointmentId ? (
         <Card className="p-10 text-center">
           <div className="w-16 h-16 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3 border border-teal-100">
             <Video className="w-8 h-8" />
           </div>
           <h3 className="font-bold text-slate-900 text-base">No Video Consultations Scheduled</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            You do not currently have any scheduled telemedicine consultations. You can find a registered clinician and request a video slot.
+            You do not currently have any scheduled telemedicine consultations. You can test the tele-room or book a new session.
           </p>
-          <div className="mt-4">
+          <div className="mt-4 flex items-center justify-center gap-3">
+            <Button
+              variant="outline"
+              size="md"
+              icon={Video}
+              onClick={() => handleSelectAppointment('apt_101')}
+            >
+              Enter Demo Room (#apt_101)
+            </Button>
             <Link to="/patient/find-doctor">
               <Button variant="primary" size="md" icon={Stethoscope}>
-                Find Doctor & Book Video Call
+                Find Doctor & Book
               </Button>
             </Link>
           </div>

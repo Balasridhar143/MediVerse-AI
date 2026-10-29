@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { doctorService, appointmentService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 
 export default function FindDoctor() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialSearch = searchParams.get('search') || '';
   const [doctors, setDoctors] = useState([]);
@@ -313,14 +314,24 @@ export default function FindDoctor() {
               </span>
             </div>
 
-            <Button
-              variant="primary"
-              size="sm"
-              className="w-full mt-2"
-              onClick={() => setBookingDoctor(null)}
-            >
-              Close & View In Ledger
-            </Button>
+            <div className="flex gap-2 mt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="flex-1"
+                onClick={() => setBookingDoctor(null)}
+              >
+                Close
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                className="flex-1"
+                onClick={() => navigate('/patient/appointments')}
+              >
+                View in Appointments
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

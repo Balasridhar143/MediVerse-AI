@@ -175,6 +175,55 @@ export default function MedicineDatabaseViewer() {
           )}
         </div>
 
+        {/* Category & Formulation Filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Therapeutic Category</label>
+            <select
+              value={categoryFilter}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value);
+                setPage(1);
+              }}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:bg-white"
+            >
+              <option value="All">All Categories (Nationwide Pharmacopeia)</option>
+              <option value="Antibiotics & Anti-Infectives">Antibiotics & Anti-Infectives</option>
+              <option value="Analgesics & Anti-Inflammatory">Analgesics & Anti-Inflammatory</option>
+              <option value="Gastroenterology">Gastroenterology & GI Care</option>
+              <option value="Cardiovascular & Antihypertensive">Cardiovascular & Antihypertensive</option>
+              <option value="Allergy & Antihistamine">Allergy & Antihistamines</option>
+              <option value="Endocrinology & Diabetes">Endocrinology & Diabetes</option>
+              <option value="Neurology & CNS">Neurology & CNS</option>
+              <option value="Dermatology & Topical">Dermatology & Topical</option>
+              <option value="Pulmonology & Respiratory">Pulmonology & Respiratory</option>
+              <option value="General Medicine & Supplements">General Medicine & Supplements</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-slate-600 mb-1">Clinical Formulation</label>
+            <select
+              value={formulationFilter}
+              onChange={(e) => {
+                setFormulationFilter(e.target.value);
+                setPage(1);
+              }}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:bg-white"
+            >
+              <option value="All">All Formulations</option>
+              <option value="Tablet">Tablet (Oral Solid)</option>
+              <option value="Capsule">Capsule (Oral Solid)</option>
+              <option value="Syrup">Syrup & Suspension (Liquid)</option>
+              <option value="Injection">Injection (Vial / Ampoule / Infusion)</option>
+              <option value="Topical">Topical (Ointment / Gel / Cream)</option>
+              <option value="Drops">Drops (Ophthalmic / Otic / Pediatric)</option>
+              <option value="Inhaler">Inhaler & Respules (Respiratory)</option>
+              <option value="Powder">Powder & Sachet</option>
+            </select>
+          </div>
+        </div>
+
         {/* Quick Suggestion Chips */}
         <div className="flex items-center gap-1.5 flex-wrap text-xs">
           <span className="text-slate-500 font-semibold flex items-center gap-1 mr-1">

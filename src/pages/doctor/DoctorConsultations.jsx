@@ -42,10 +42,17 @@ export default function DoctorConsultations() {
         const fullList = activeList.length > 0 ? activeList : list;
         setAppointments(fullList);
 
-        if (!urlAppointmentId && fullList.length > 0) {
-          const first = fullList[0];
-          setSelectedAppointmentId(first.id);
-          setSearchParams({ appointmentId: first.id }, { replace: true });
+        if (!urlAppointmentId) {
+          if (fullList.length > 0) {
+            const first = fullList[0];
+            setSelectedAppointmentId(first.id);
+            setSearchParams({ appointmentId: first.id }, { replace: true });
+          } else {
+            setSelectedAppointmentId('apt_101');
+            setSearchParams({ appointmentId: 'apt_101' }, { replace: true });
+          }
+        } else {
+          setSelectedAppointmentId(urlAppointmentId);
         }
       } catch (err) {
         console.warn('Could not fetch doctor appointments:', err);
@@ -92,16 +99,24 @@ export default function DoctorConsultations() {
           <Loader2 className="w-8 h-8 text-teal-600 animate-spin mx-auto mb-3" />
           <p className="font-semibold text-slate-700">Connecting to Clinician Telemedicine Gateway...</p>
         </Card>
-      ) : appointments.length === 0 ? (
+      ) : appointments.length === 0 && !selectedAppointmentId ? (
         <Card className="p-10 text-center">
           <div className="w-16 h-16 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3 border border-teal-100">
             <Video className="w-8 h-8" />
           </div>
           <h3 className="font-bold text-slate-900 text-base">No Confirmed Tele-Consultations</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            You do not currently have any confirmed video consultations scheduled on your roster. New patient bookings will appear on your dashboard.
+            You do not currently have any confirmed video consultations scheduled on your roster. You can test the tele-room or view your dashboard.
           </p>
-          <div className="mt-4">
+          <div className="mt-4 flex items-center justify-center gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              icon={Video}
+              onClick={() => handleSelectAppointment('apt_101')}
+            >
+              Enter Demo Room (#apt_101)
+            </Button>
             <Link to="/doctor/dashboard">
               <Button variant="primary" size="sm">
                 View Doctor Dashboard

@@ -1,4 +1,5 @@
 import json
+import datetime
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
 from sqlalchemy.orm import Session
@@ -60,10 +61,13 @@ def list_doctors(
         formatted_docs.append({
             "id": d.id,
             "user_id": d.user_id,
+            "userId": d.user_id,
             "name": d.full_name,
+            "doctor_name": d.full_name,
             "specialization": d.specialization,
             "qualifications": d.qualifications or "MBBS, MD",
             "hospital": d.hospital_name or "City Care Multispeciality Hospital",
+            "hospital_name": d.hospital_name or "City Care Multispeciality Hospital",
             "hospital_id": d.hospital_id,
             "department": d.department or d.specialization,
             "experienceYears": d.experience_years or 8,
@@ -156,10 +160,13 @@ def get_doctor_details(doctor_id: str, db: Session = Depends(get_db)):
         return {
             "id": d.id,
             "user_id": d.user_id,
+            "userId": d.user_id,
             "name": d.full_name,
+            "doctor_name": d.full_name,
             "specialization": d.specialization,
             "qualifications": d.qualifications or "MBBS, MD",
             "hospital": d.hospital_name or "City Care Multispeciality Hospital",
+            "hospital_name": d.hospital_name or "City Care Multispeciality Hospital",
             "hospital_id": d.hospital_id,
             "department": d.department or d.specialization,
             "licenseNumber": d.license_number,

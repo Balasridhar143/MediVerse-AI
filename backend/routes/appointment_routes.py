@@ -22,12 +22,11 @@ def book_appointment(
     """
     # 1. Resolve Doctor
     doctor_identifier = payload.get("doctor_id") or payload.get("doctor") or ""
-    doctor_name = payload.get("doctor_name") or payload.get("doctor") or "Dr. Arun Kumar"
+    doctor_name = payload.get("doctor_name") or payload.get("doctor") or ""
     
-    # Try finding doctor user
+    # Try finding doctor user directly from User table
     doctor_user = None
     if doctor_identifier:
-        # Check by user_id or doctor_id or full_name
         doctor_user = db.query(models.User).filter(
             models.User.role == "doctor",
             or_(
@@ -36,8 +35,55 @@ def book_appointment(
             )
         ).first()
 
+    # If not found yet, check Doctor table (by id, user_id, or full_name)
+    if not doctor_user and doctor_identifier:
+        doc_record = db.query(models.Doctor).filter(
+            or_(
+                models.Doctor.id == doctor_identifier,
+                models.Doctor.user_id == doctor_identifier,
+                models.Doctor.full_name.ilike(f"%{doctor_identifier}%")
+            )
+        ).first()
+        if doc_record:
+            if not doctor_name:
+                doctor_name = doc_record.full_name
+            if doc_record.user_id:
+                doctor_user = db.query(models.User).filter(
+                    models.User.id == doc_record.user_id,
+                    models.User.role == "doctor"
+                ).first()
+
+    # If still not found, check Professional table
+    if not doctor_user and doctor_identifier:
+        prof_record = db.query(models.Professional).filter(
+            or_(
+                models.Professional.id == doctor_identifier,
+                models.Professional.name.ilike(f"%{doctor_identifier}%")
+            )
+        ).first()
+        if prof_record and not doctor_name:
+            doctor_name = prof_record.name if prof_record.name.startswith("Dr.") else f"Dr. {prof_record.name}"
+
+    # If doctor_user is not yet resolved, match by specialization or department
     if not doctor_user:
-        # Fall back to default demonstration doctor if booking against directory practitioner
+        spec = payload.get("specialization") or payload.get("department") or ""
+        if spec:
+            doc_with_spec = db.query(models.Doctor).filter(
+                or_(
+                    models.Doctor.specialization.ilike(f"%{spec}%"),
+                    models.Doctor.department.ilike(f"%{spec}%")
+                )
+            ).first()
+            if doc_with_spec and doc_with_spec.user_id:
+                doctor_user = db.query(models.User).filter(
+                    models.User.id == doc_with_spec.user_id,
+                    models.User.role == "doctor"
+                ).first()
+                if not doctor_name:
+                    doctor_name = doc_with_spec.full_name
+
+    # If still not found, fallback to the primary verified registered doctor
+    if not doctor_user:
         doctor_user = db.query(models.User).filter(models.User.role == "doctor").first()
 
     if not doctor_user:
@@ -45,6 +91,11 @@ def book_appointment(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Designated doctor is not registered for telehealth appointments."
         )
+
+    if not doctor_name and doctor_user:
+        doctor_name = doctor_user.full_name
+    elif not doctor_name:
+        doctor_name = "Dr. Arun Kumar"
 
     # 2. Extract patient details
     patient_phone = payload.get("patient_phone") or (current_user.patient_profile.phone if current_user.patient_profile else "+91 98765 43210")
@@ -54,6 +105,12 @@ def book_appointment(
     # 3. Create appointment
     apt_id = f"apt_{uuid.uuid4().hex[:8]}"
     room_id = f"room_{apt_id}"
+    appointment_date = payload.get("appointment_date") or payload.get("date") or datetime.date.today().isoformat()
+    time_slot = payload.get("time_slot") or payload.get("time") or "10:00 AM"
+    hospital_name = payload.get("hospital_name") or payload.get("hospital") or "City Care Multispeciality Hospital"
+    specialization = payload.get("specialization") or payload.get("department") or "General Medicine"
+    department = payload.get("department") or payload.get("specialization") or "General Medicine"
+
     new_apt = models.Appointment(
         id=apt_id,
         patient_id=current_user.id,
@@ -63,11 +120,11 @@ def book_appointment(
         patient_name=patient_name,
         patient_phone=patient_phone,
         patient_email=patient_email,
-        hospital_name=payload.get("hospital") or "City Care Multispeciality Hospital",
-        specialization=payload.get("department") or payload.get("specialization") or "General Medicine",
-        department=payload.get("department") or "General Medicine",
-        appointment_date=payload.get("date") or datetime.date.today().isoformat(),
-        time_slot=payload.get("time") or "10:00 AM",
+        hospital_name=hospital_name,
+        specialization=specialization,
+        department=department,
+        appointment_date=appointment_date,
+        time_slot=time_slot,
         type=payload.get("type") or "Video Consultation",
         notes=payload.get("notes") or "",
         status="PENDING",
@@ -96,18 +153,26 @@ def book_appointment(
     return {
         "id": new_apt.id,
         "patientId": new_apt.patient_id,
+        "patient_id": new_apt.patient_id,
         "doctorId": new_apt.doctor_id,
+        "doctor_id": new_apt.doctor_id,
         "doctorName": new_apt.doctor_name,
+        "doctor_name": new_apt.doctor_name,
         "patientName": new_apt.patient_name,
+        "patient_name": new_apt.patient_name,
         "hospital": new_apt.hospital_name,
+        "hospital_name": new_apt.hospital_name,
         "specialization": new_apt.specialization,
         "department": new_apt.department,
         "date": new_apt.appointment_date,
+        "appointment_date": new_apt.appointment_date,
         "time": new_apt.time_slot,
+        "time_slot": new_apt.time_slot,
         "type": new_apt.type,
         "notes": new_apt.notes,
         "status": new_apt.status,
         "roomId": new_apt.room_id,
+        "room_id": new_apt.room_id,
         "createdAt": new_apt.created_at.isoformat()
     }
 
@@ -127,20 +192,29 @@ def get_my_appointments(
         {
             "id": a.id,
             "patientId": a.patient_id,
+            "patient_id": a.patient_id,
             "doctorId": a.doctor_id,
+            "doctor_id": a.doctor_id,
             "doctorName": a.doctor_name,
+            "doctor_name": a.doctor_name,
             "patientName": a.patient_name,
+            "patient_name": a.patient_name,
             "hospital": a.hospital_name,
+            "hospital_name": a.hospital_name,
             "specialization": a.specialization,
             "department": a.department,
             "date": a.appointment_date,
+            "appointment_date": a.appointment_date,
             "time": a.time_slot,
+            "time_slot": a.time_slot,
             "type": a.type,
             "notes": a.notes,
             "status": a.status,
             "roomId": a.room_id,
+            "room_id": a.room_id,
             "rejection_reason": a.rejection_reason,
-            "createdAt": a.created_at.isoformat() if a.created_at else None
+            "createdAt": a.created_at.isoformat() if a.created_at else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None
         }
         for a in apts
     ]
@@ -164,22 +238,33 @@ def get_doctor_appointments(
         {
             "id": a.id,
             "patientId": a.patient_id,
+            "patient_id": a.patient_id,
             "doctorId": a.doctor_id,
+            "doctor_id": a.doctor_id,
             "doctorName": a.doctor_name,
+            "doctor_name": a.doctor_name,
             "patientName": a.patient_name,
+            "patient_name": a.patient_name,
             "patientPhone": a.patient_phone,
+            "patient_phone": a.patient_phone,
             "patientEmail": a.patient_email,
+            "patient_email": a.patient_email,
             "hospital": a.hospital_name,
+            "hospital_name": a.hospital_name,
             "specialization": a.specialization,
             "department": a.department,
             "date": a.appointment_date,
+            "appointment_date": a.appointment_date,
             "time": a.time_slot,
+            "time_slot": a.time_slot,
             "type": a.type,
             "notes": a.notes,
             "chiefComplaint": a.notes or "General clinical checkup",
             "status": a.status,
             "roomId": a.room_id,
-            "createdAt": a.created_at.isoformat() if a.created_at else None
+            "room_id": a.room_id,
+            "createdAt": a.created_at.isoformat() if a.created_at else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None
         }
         for a in apts
     ]

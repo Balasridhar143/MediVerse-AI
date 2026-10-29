@@ -173,22 +173,46 @@ def list_medicines(
     if clean_q:
         try:
             from sqlalchemy import text
-            fts_query = f"{clean_q}*"
+            # Expand standard UK/Indian pharmacopeial spelling variants
+            q_lower = clean_q.lower()
+            if "amoxicillin" in q_lower or "amoxycillin" in q_lower:
+                fts_query = "Amoxicillin* OR Amoxycillin*"
+            elif "paracetamol" in q_lower or "acetaminophen" in q_lower:
+                fts_query = "Paracetamol* OR Acetaminophen*"
+            else:
+                fts_query = f"{clean_q}*"
+
+            filters = ["medicines_fts MATCH :q"]
+            sql_params = {"q": fts_query, "limit": limit, "offset": offset}
+            if category and category.lower() != "all":
+                filters.append("LOWER(m.category) LIKE :cat")
+                sql_params["cat"] = f"%{category.strip().lower()}%"
+            if formulation and formulation.lower() != "all":
+                filters.append("LOWER(m.formulation) LIKE :form")
+                sql_params["form"] = f"%{formulation.strip().lower()}%"
+
+            where_clause = " AND ".join(filters)
+
             count_res = db.execute(
-                text("SELECT count(*) FROM medicines_fts WHERE medicines_fts MATCH :q"),
-                {"q": fts_query}
+                text(f"""
+                    SELECT count(*) 
+                    FROM medicines_fts f
+                    JOIN medicines m ON m.rowid = f.rowid
+                    WHERE {where_clause}
+                """),
+                sql_params
             ).scalar() or 0
 
             medicines_rows = db.execute(
-                text("""
+                text(f"""
                     SELECT m.id, m.brand_name, m.generic_name, m.manufacturer, m.price, m.pack_size,
                            m.formulation, m.strength, m.category, m.composition, m.source, m.source_url, m.is_discontinued
                     FROM medicines_fts f
                     JOIN medicines m ON m.rowid = f.rowid
-                    WHERE medicines_fts MATCH :q
+                    WHERE {where_clause}
                     LIMIT :limit OFFSET :offset
                 """),
-                {"q": fts_query, "limit": limit, "offset": offset}
+                sql_params
             ).fetchall()
 
             items = []

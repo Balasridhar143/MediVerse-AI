@@ -140,10 +140,18 @@ export default function WebRTCConsultationRoom({
     const pc = new RTCPeerConnection({ iceServers });
     pcRef.current = pc;
 
-    if (stream) {
+    if (stream && stream.getTracks().length > 0) {
       stream.getTracks().forEach((track) => {
         pc.addTrack(track, stream);
       });
+    } else {
+      // Add receive transceivers so peer can negotiate video & audio stream even if local mic/cam is busy
+      try {
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+        pc.addTransceiver('video', { direction: 'recvonly' });
+      } catch (e) {
+        // Fallback for browsers with legacy webrtc
+      }
     }
 
     // Remote track handler
@@ -226,6 +234,15 @@ export default function WebRTCConsultationRoom({
       } catch (e) {
         console.warn('Error adding ICE candidate:', e);
       }
+    } else if (type === 'peer-ready' && pc) {
+      // Peer arrived and requests negotiation
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await consultationService.sendSignal(appointmentId, 'sdp-offer', offer);
+      } catch (e) {
+        console.warn('Error sending SDP offer upon peer-ready:', e);
+      }
     } else if (type === 'chat-message') {
       setMessages((prev) => [...prev, data]);
     } else if (type === 'leave') {
@@ -249,11 +266,23 @@ export default function WebRTCConsultationRoom({
       const pc = setupPeerConnection(stream);
       startSignalPolling();
 
-      // Doctor initiates the offer, or patient initiates if doctor hasn't yet
-      if (userRole === 'doctor') {
+      // Announce arrival to room
+      try {
+        await consultationService.sendSignal(appointmentId, 'peer-ready', {
+          role: userRole,
+          timestamp: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Could not post peer-ready signal:', e);
+      }
+
+      // Initiate WebRTC negotiation offer
+      try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         await consultationService.sendSignal(appointmentId, 'sdp-offer', offer);
+      } catch (offerErr) {
+        console.warn('Could not create SDP offer:', offerErr);
       }
 
       setInCall(true);
@@ -554,8 +583,28 @@ export default function WebRTCConsultationRoom({
                 )}
               </div>
 
+              {/* Vitals Quick-Action Chips */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 text-[10px]">
+                <span className="text-slate-400 font-bold shrink-0">Quick Vitals:</span>
+                {[
+                  'BP: 120/80 mmHg',
+                  'SpO2: 98% Normal',
+                  'HR: 74 bpm Normal',
+                  'Temp: 98.4°F Normal'
+                ].map((vital) => (
+                  <button
+                    key={vital}
+                    type="button"
+                    onClick={() => setChatInput(vital)}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 rounded border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    {vital}
+                  </button>
+                ))}
+              </div>
+
               {/* Chat Input */}
-              <form onSubmit={handleSendMessage} className="flex gap-2 pt-3 border-t border-slate-100 mt-2">
+              <form onSubmit={handleSendMessage} className="flex gap-2 pt-2 border-t border-slate-100 mt-2">
                 <input
                   type="text"
                   value={chatInput}
