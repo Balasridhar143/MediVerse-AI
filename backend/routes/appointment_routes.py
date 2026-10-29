@@ -97,25 +97,53 @@ def book_appointment(
     elif not doctor_name:
         doctor_name = "Dr. Arun Kumar"
 
-    # 2. Extract patient details
-    patient_phone = payload.get("patient_phone") or (current_user.patient_profile.phone if current_user.patient_profile else "+91 98765 43210")
-    patient_email = current_user.email
-    patient_name = current_user.full_name
-
-    # 3. Create appointment
-    apt_id = f"apt_{uuid.uuid4().hex[:8]}"
-    room_id = f"room_{apt_id}"
     appointment_date = payload.get("appointment_date") or payload.get("date") or datetime.date.today().isoformat()
     time_slot = payload.get("time_slot") or payload.get("time") or "10:00 AM"
     hospital_name = payload.get("hospital_name") or payload.get("hospital") or "City Care Multispeciality Hospital"
     specialization = payload.get("specialization") or payload.get("department") or "General Medicine"
     department = payload.get("department") or payload.get("specialization") or "General Medicine"
 
+    # 2. Extract and ensure patient details & profile record
+    patient_profile = db.query(models.Patient).filter(models.Patient.user_id == current_user.id).first()
+    if not patient_profile and current_user.role == "patient":
+        patient_profile = models.Patient(
+            id=f"pat_{uuid.uuid4().hex[:8]}",
+            user_id=current_user.id,
+            full_name=current_user.full_name,
+            phone=payload.get("patient_phone") or "+91 98765 43210",
+            address="Address on record"
+        )
+        db.add(patient_profile)
+        db.flush()
+
+    patient_phone = payload.get("patient_phone") or (patient_profile.phone if patient_profile else "+91 98765 43210")
+    patient_email = current_user.email
+    patient_name = current_user.full_name
+
+    # Ensure doctor has doctor profile
+    doctor_profile = db.query(models.Doctor).filter(models.Doctor.user_id == doctor_user.id).first()
+    if not doctor_profile:
+        doctor_profile = models.Doctor(
+            id=f"doc_{uuid.uuid4().hex[:8]}",
+            user_id=doctor_user.id,
+            full_name=doctor_user.full_name,
+            specialization=specialization,
+            hospital_name=hospital_name,
+            is_available=True,
+            is_verified=True
+        )
+        db.add(doctor_profile)
+        db.flush()
+
+    # 3. Create appointment
+    apt_id = f"apt_{uuid.uuid4().hex[:8]}"
+    room_id = f"room_{apt_id}"
+
     new_apt = models.Appointment(
         id=apt_id,
         patient_id=current_user.id,
         doctor_id=doctor_user.id,
-        doctor_profile_id=getattr(doctor_user.doctor_profile, "id", None) if doctor_user.doctor_profile else None,
+        doctor_profile_id=doctor_profile.id if doctor_profile else None,
         doctor_name=doctor_name,
         patient_name=patient_name,
         patient_phone=patient_phone,

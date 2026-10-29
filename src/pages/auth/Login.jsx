@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Activity, Lock, Mail, ArrowRight, ShieldCheck, Eye, EyeOff, KeyRound, RefreshCw } from 'lucide-react';
+import { Activity, Lock, Mail, ArrowRight, ShieldCheck, Eye, EyeOff, KeyRound, Loader2, AlertCircle } from 'lucide-react';
 import Button from '../../components/Button';
 import { authService } from '../../services/api';
 
@@ -12,8 +12,9 @@ export default function Login() {
   // Mode: 'password' | 'otp'
   const [loginMode, setLoginMode] = useState('password');
 
-  const [email, setEmail] = useState('patient@example.com');
-  const [password, setPassword] = useState('password123');
+  // Input states - strictly start empty as requested
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   // OTP Login state
@@ -36,14 +37,6 @@ export default function Login() {
     return () => clearInterval(timer);
   }, [cooldown]);
 
-  // Quick fill demo helper buttons
-  const handleQuickFill = (demoEmail) => {
-    setEmail(demoEmail);
-    setPassword('password123');
-    setError('');
-    setInfoMsg('');
-  };
-
   const handleRedirect = (authenticatedUser) => {
     const userRole = authenticatedUser.role;
     if (userRole === 'doctor') {
@@ -61,17 +54,29 @@ export default function Login() {
     setError('');
     setInfoMsg('');
 
-    if (!email || !password) {
-      setError('Please provide both email and password.');
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Please enter your email address.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Please enter a valid email address format.');
+      return;
+    }
+
+    if (!password) {
+      setError('Please enter your password.');
       return;
     }
 
     try {
       setLoading(true);
-      const authenticatedUser = await login(email, password);
+      const authenticatedUser = await login(cleanEmail, password);
       handleRedirect(authenticatedUser);
     } catch (err) {
-      setError(err.message || 'Authentication failed. Please verify your credentials.');
+      setError(err.message || 'Authentication failed. Please verify your email and password.');
     } finally {
       setLoading(false);
     }
@@ -81,19 +86,27 @@ export default function Login() {
   const handleRequestLoginOtp = async () => {
     setError('');
     setInfoMsg('');
-    if (!email) {
-      setError('Please enter your email address first.');
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Please enter your email address first to receive an OTP.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Please enter a valid email address format.');
       return;
     }
 
     try {
       setLoading(true);
-      const res = await authService.requestOtp(email);
+      const res = await authService.requestOtp(cleanEmail);
       setOtpSent(true);
       setCooldown(res.cooldown || 60);
-      setInfoMsg('A 6-digit one-time login code has been dispatched to your email.');
+      setInfoMsg('A 6-digit one-time login code has been dispatched to your email address.');
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Unable to request login OTP.');
+      setError(err.response?.data?.detail || err.message || 'Unable to dispatch login OTP. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -105,17 +118,25 @@ export default function Login() {
     setError('');
     setInfoMsg('');
 
-    if (!email || !otpCode) {
-      setError('Please enter your email and the 6-digit verification code.');
+    const cleanEmail = email.trim();
+    const cleanOtp = otpCode.trim();
+
+    if (!cleanEmail || !cleanOtp) {
+      setError('Please enter your email address and the 6-digit verification code.');
+      return;
+    }
+
+    if (cleanOtp.length !== 6) {
+      setError('Please enter the complete 6-digit one-time password.');
       return;
     }
 
     try {
       setLoading(true);
-      const authenticatedUser = await loginWithOtp(email, otpCode);
+      const authenticatedUser = await loginWithOtp(cleanEmail, cleanOtp);
       handleRedirect(authenticatedUser);
     } catch (err) {
-      setError(err.message || 'Invalid or expired OTP code.');
+      setError(err.message || 'Invalid or expired OTP code. Please check and try again.');
     } finally {
       setLoading(false);
     }
@@ -132,20 +153,19 @@ export default function Login() {
           Mediverse AI
         </h1>
         <p className="mt-1 text-xs sm:text-sm text-slate-500">
-          Integrated Healthcare Management & Clinical Telehealth
+          Clinical Healthcare Management & Telemedicine Suite
         </p>
       </div>
 
-      {/* Main Form Card */}
+      {/* Main Login Card */}
       <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-6 shadow-xs border border-slate-200 rounded-xl sm:px-10">
-          
-          {/* Login Mode Tabs: Password vs OTP */}
-          <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-lg mb-6 text-xs font-medium">
+        <div className="bg-white py-8 px-5 sm:px-8 shadow-xs border border-slate-200 rounded-2xl">
+          {/* Mode Switcher Tabs */}
+          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg mb-6 text-xs">
             <button
               type="button"
               onClick={() => { setLoginMode('password'); setError(''); setInfoMsg(''); }}
-              className={`py-1.5 rounded-md transition-colors cursor-pointer ${
+              className={`py-2 rounded-md font-medium transition-colors cursor-pointer text-center ${
                 loginMode === 'password'
                   ? 'bg-white text-slate-900 shadow-2xs font-semibold'
                   : 'text-slate-600 hover:text-slate-900'
@@ -156,7 +176,7 @@ export default function Login() {
             <button
               type="button"
               onClick={() => { setLoginMode('otp'); setError(''); setInfoMsg(''); }}
-              className={`py-1.5 rounded-md transition-colors cursor-pointer ${
+              className={`py-2 rounded-md font-medium transition-colors cursor-pointer text-center ${
                 loginMode === 'otp'
                   ? 'bg-white text-slate-900 shadow-2xs font-semibold'
                   : 'text-slate-600 hover:text-slate-900'
@@ -167,74 +187,35 @@ export default function Login() {
           </div>
 
           <div className="mb-5">
-            <h2 className="text-base font-semibold text-slate-800">
+            <h2 className="text-base font-semibold text-slate-900">
               {loginMode === 'password' ? 'Sign in to your account' : 'Sign in with One-Time Password'}
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
               {loginMode === 'password'
-                ? 'Enter your credentials to access your designated healthcare workspace'
-                : 'Receive a temporary 6-digit authentication code via email'}
+                ? 'Enter your verified credentials to access your clinical portal'
+                : 'Enter your registered email to receive an instant verification code'}
             </p>
-          </div>
-
-          {/* Quick Demo Credentials Fill */}
-          <div className="mb-5 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-              Demo Test Accounts (Click to Fill)
-            </span>
-            <div className="grid grid-cols-3 gap-1.5 text-xs">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('patient@example.com')}
-                className={`py-1.5 px-2 rounded-md border text-center font-medium transition-colors cursor-pointer ${
-                  email.includes('patient')
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                Patient
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('doctor@example.com')}
-                className={`py-1.5 px-2 rounded-md border text-center font-medium transition-colors cursor-pointer ${
-                  email.includes('doctor')
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                Doctor
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('admin@example.com')}
-                className={`py-1.5 px-2 rounded-md border text-center font-medium transition-colors cursor-pointer ${
-                  email.includes('admin')
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                Hospital Admin
-              </button>
-            </div>
           </div>
 
           {/* Error Message */}
           {error && (
-            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">
-              {error}
+            <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{error}</span>
             </div>
           )}
+
           {/* Info Message */}
           {infoMsg && (
-            <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700">
-              {infoMsg}
+            <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-start gap-2.5">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>{infoMsg}</span>
             </div>
           )}
 
           {/* MODE 1: PASSWORD LOGIN */}
           {loginMode === 'password' && (
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4" noValidate>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   Email Address
@@ -246,9 +227,14 @@ export default function Login() {
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    className="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (error) setError('');
+                    }}
+                    placeholder="Enter your email address"
+                    className="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    disabled={loading}
+                    autoComplete="email"
                     required
                   />
                 </div>
@@ -273,14 +259,21 @@ export default function Login() {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="block w-full pl-9 pr-10 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (error) setError('');
+                    }}
+                    placeholder="Enter your password"
+                    className="block w-full pl-9 pr-10 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    disabled={loading}
+                    autoComplete="current-password"
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    title={showPassword ? 'Hide password' : 'Show password'}
                     className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -294,7 +287,7 @@ export default function Login() {
                 size="md"
                 className="w-full mt-2"
                 disabled={loading}
-                icon={loading ? null : ArrowRight}
+                icon={loading ? Loader2 : ArrowRight}
               >
                 {loading ? 'Authenticating...' : 'Sign In'}
               </Button>
@@ -303,7 +296,7 @@ export default function Login() {
 
           {/* MODE 2: OTP LOGIN */}
           {loginMode === 'otp' && (
-            <form onSubmit={handleOtpLoginSubmit} className="space-y-4">
+            <form onSubmit={handleOtpLoginSubmit} className="space-y-4" noValidate>
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
                   Email Address
@@ -315,17 +308,22 @@ export default function Login() {
                   <input
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="name@example.com"
-                    className="block w-full pl-9 pr-24 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (error) setError('');
+                    }}
+                    placeholder="Enter your email address"
+                    className="block w-full pl-9 pr-24 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white text-slate-900 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    disabled={loading}
+                    autoComplete="email"
                     required
                   />
                   <button
                     type="button"
                     onClick={handleRequestLoginOtp}
-                    disabled={loading || cooldown > 0 || !email}
-                    className={`absolute inset-y-1 right-1 px-2.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
-                      cooldown > 0
+                    disabled={loading || cooldown > 0 || !email.trim()}
+                    className={`absolute inset-y-1 right-1 px-3 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                      cooldown > 0 || !email.trim()
                         ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                         : 'bg-teal-50 text-teal-700 hover:bg-teal-100'
                     }`}
@@ -347,9 +345,13 @@ export default function Login() {
                     type="text"
                     maxLength={6}
                     value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => {
+                      setOtpCode(e.target.value.replace(/\D/g, ''));
+                      if (error) setError('');
+                    }}
                     placeholder="Enter 6-digit code"
-                    className="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white tracking-widest font-mono focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    className="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-xs sm:text-sm bg-white text-slate-900 placeholder:text-slate-400 tracking-widest font-mono focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                    disabled={loading}
                     required
                   />
                 </div>
@@ -361,9 +363,9 @@ export default function Login() {
                 size="md"
                 className="w-full mt-2"
                 disabled={loading || otpCode.length < 6}
-                icon={loading ? null : ArrowRight}
+                icon={loading ? Loader2 : ArrowRight}
               >
-                {loading ? 'Verifying...' : 'Verify & Sign In'}
+                {loading ? 'Verifying OTP...' : 'Verify & Sign In'}
               </Button>
             </form>
           )}
@@ -371,7 +373,7 @@ export default function Login() {
           {/* Registration link */}
           <div className="mt-6 pt-4 border-t border-slate-100 text-center">
             <p className="text-xs text-slate-500">
-              New patient or clinician?{' '}
+              New patient or healthcare clinician?{' '}
               <Link
                 to="/register"
                 className="font-medium text-teal-700 hover:text-teal-800 hover:underline"
@@ -382,7 +384,7 @@ export default function Login() {
           </div>
         </div>
 
-        {/* Security / HIPAA compliance footer note */}
+        {/* Security & Regulatory Standards Footer */}
         <div className="mt-6 text-center text-[11px] text-slate-500 flex items-center justify-center gap-1.5">
           <ShieldCheck className="w-4 h-4 text-teal-600" />
           <span>NABH & HIPAA Compliant Role-Based Access Control</span>

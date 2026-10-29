@@ -1389,16 +1389,37 @@ app.post(['/appointments', '/api/appointments'], authenticateToken, async (req, 
     const doctorRecord = docs[0];
     const doctorUserId = doctorRecord.user_id;
 
-    // 2. Fetch patient details
-    const patients = await sql`
-      SELECT u.full_name, u.email, p.phone
-      FROM users u
-      LEFT JOIN patients p ON u.id = p.user_id
-      WHERE u.id = ${patientUserId}
-      LIMIT 1;
-    `;
-    const patientName = patients.length > 0 ? patients[0].full_name : req.user.full_name || 'Patient';
-    const patientEmail = patients.length > 0 ? patients[0].email : req.user.email;
+    // 2. Fetch and ensure patient user & profile record
+    let actualPatientUserId = patientUserId;
+    let patientUsers = await sql`SELECT id, full_name, email FROM users WHERE id = ${actualPatientUserId} LIMIT 1;`;
+    if (patientUsers.length === 0 && req.user.email) {
+      patientUsers = await sql`SELECT id, full_name, email FROM users WHERE email = ${req.user.email.toLowerCase().trim()} LIMIT 1;`;
+      if (patientUsers.length > 0) {
+        actualPatientUserId = patientUsers[0].id;
+      }
+    }
+
+    if (patientUsers.length === 0) {
+      return res.status(400).json({ detail: 'Patient user account was not found in database. Please log in again.' });
+    }
+
+    const patientUserRec = patientUsers[0];
+    const patients = await sql`SELECT id, phone FROM patients WHERE user_id = ${actualPatientUserId} LIMIT 1;`;
+    if (patients.length === 0) {
+      const patId = `pat_${crypto.randomBytes(6).toString('hex')}`;
+      try {
+        await sql`
+          INSERT INTO patients (id, user_id, full_name, phone, created_at)
+          VALUES (${patId}, ${actualPatientUserId}, ${patientUserRec.full_name}, ${phone || '+91 98765 43210'}, NOW())
+          ON CONFLICT (id) DO NOTHING;
+        `;
+      } catch (pe) {
+        console.warn('Patient profile ensure notice:', pe.message);
+      }
+    }
+
+    const patientName = patientUserRec.full_name || 'Patient';
+    const patientEmail = patientUserRec.email;
     const patientPhone = phone || (patients.length > 0 ? patients[0].phone : '+91 98765 43210');
 
     // 3. Concurrency check: prevent double booking on exclusive slot
@@ -1430,7 +1451,7 @@ app.post(['/appointments', '/api/appointments'], authenticateToken, async (req, 
         id, patient_id, doctor_id, doctor_profile_id, doctor_name, patient_name, patient_phone, patient_email,
         hospital_name, specialization, department, appointment_date, time_slot, type, notes, status, created_at, updated_at
       ) VALUES (
-        ${appointmentId}, ${patientUserId}, ${doctorUserId}, ${doctorRecord.id}, ${cleanDocName}, ${patientName}, ${patientPhone}, ${patientEmail},
+        ${appointmentId}, ${actualPatientUserId}, ${doctorUserId}, ${doctorRecord.id}, ${cleanDocName}, ${patientName}, ${patientPhone}, ${patientEmail},
         ${cleanHospital}, ${cleanSpec}, ${cleanDept}, ${targetDate}, ${targetTime}, ${type}, ${notes}, 'PENDING', NOW(), NOW()
       );
     `;
@@ -1445,8 +1466,8 @@ app.post(['/appointments', '/api/appointments'], authenticateToken, async (req, 
 
     return res.status(201).json({
       id: appointmentId,
-      patientId: patientUserId,
-      patient_id: patientUserId,
+      patientId: actualPatientUserId,
+      patient_id: actualPatientUserId,
       doctorId: doctorUserId,
       doctor_id: doctorUserId,
       doctorName: cleanDocName,

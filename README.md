@@ -1,12 +1,14 @@
 # MediVerse AI — Clinical Telehealth & India-Wide Integrated Healthcare Database
 
-[![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB?style=flat-square&logo=react)](https://react.dev/)
-[![SQLite](https://img.shields.io/badge/Database-SQLite%20Persistent-003B57?style=flat-square&logo=sqlite)](https://www.sqlite.org/)
-[![Leaflet](https://img.shields.io/badge/Maps-Leaflet%20%2B%20OpenStreetMap-199900?style=flat-square&logo=leaflet)](https://leafletjs.com/)
+[![GitHub Pages](https://img.shields.io/badge/Deploy-GitHub%20Pages-22c55e?style=flat-square&logo=github)](https://balasridhar143.github.io/MediVerse-AI/)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Frontend](https://img.shields.io/badge/Frontend-React%2019%20%2B%20Vite-61DAFB?style=flat-square&logo=react)](https://react.dev/)
+[![Database](https://img.shields.io/badge/Database-SQLite%20%7C%20Postgres-003B57?style=flat-square&logo=sqlite)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-MediVerse AI is an enterprise-grade clinical telehealth platform and nationwide Indian healthcare data registry. Built with a **FastAPI** persistent backend and a modern **React (Vite)** interface, the platform integrates **7,24,794 legitimate, audited healthcare records** across 51 Indian states and union territories with role-based clinical governance, interactive GIS mapping, and diagnostic intelligence.
+> 🌐 **Live Public Frontend**: [https://balasridhar143.github.io/MediVerse-AI/](https://balasridhar143.github.io/MediVerse-AI/)
+
+MediVerse AI is an enterprise-grade clinical telehealth platform and nationwide Indian healthcare data registry. Built with a **FastAPI** persistent backend and a modern **React 19 (Vite)** interface, the platform integrates **7,24,794 legitimate, audited healthcare records** across Indian states and union territories with role-based clinical governance, interactive GIS mapping, and diagnostic intelligence.
 
 ---
 

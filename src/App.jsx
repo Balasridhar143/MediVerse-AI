@@ -148,7 +148,7 @@ function MobileAppInitializer() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <MobileAppInitializer />
       <AuthProvider>
         <ElderModeProvider>

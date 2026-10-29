@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
   return {
+    base: process.env.VITE_BASE_PATH || (process.env.GITHUB_PAGES === 'true' ? '/MediVerse-AI/' : '/'),
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

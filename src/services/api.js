@@ -4,11 +4,8 @@ import { mockPatientAllergies, runPrescriptionSafetyCheck } from '../data/medici
 import { verifiedMedicineDatabase } from '../data/verifiedMedicineDatabase';
 
 // Base API configuration for Mediverse API:
-// When running inside Android Capacitor APK, connects to production backend https://mediverse-ai-fawn.vercel.app/api
+// Respects VITE_API_URL / VITE_API_BASE_URL if configured, otherwise falls back to local /api proxy
 const getApiBaseUrl = () => {
-  if (typeof window !== 'undefined' && window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
-    return 'https://mediverse-ai-fawn.vercel.app/api';
-  }
   return import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api';
 };
 
