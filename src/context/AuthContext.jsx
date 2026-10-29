@@ -72,13 +72,10 @@ export const AuthProvider = ({ children }) => {
       }
       throw new Error('Invalid login response from authentication server.');
     } catch (err) {
-      if (err.isStaticHostError || err.response?.status === 405) {
-        throw new Error(err.response?.data?.detail || err.message || 'GitHub Pages is a static host and cannot process authentication directly (HTTP 405). Please connect a deployed backend service URL.');
-      }
       if (!err.response) {
-        throw new Error('Cannot connect to Mediverse backend server. Please verify the backend service is running or configure the live API URL.');
+        throw new Error('Unable to connect to authentication server. Please check your network connection.');
       }
-      const errMsg = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.';
+      const errMsg = err.response?.data?.detail || err.message || 'Authentication failed. Please check your credentials.';
       throw new Error(errMsg);
     }
   };
@@ -143,11 +140,8 @@ export const AuthProvider = ({ children }) => {
       }
       throw new Error('Registration failed.');
     } catch (err) {
-      if (err.isStaticHostError || err.response?.status === 405) {
-        throw new Error(err.response?.data?.detail || err.message || 'GitHub Pages is a static host and cannot process registrations directly (HTTP 405). Please connect a deployed backend service URL.');
-      }
       if (!err.response) {
-        throw new Error('Cannot connect to Mediverse backend server. Please verify the backend service is running or configure the live API URL.');
+        throw new Error('Unable to connect to registration server. Please check your network connection.');
       }
       const errMsg = err.response?.data?.detail || err.message || 'Registration failed.';
       throw new Error(errMsg);

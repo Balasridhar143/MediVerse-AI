@@ -41,39 +41,12 @@ const api = axios.create({
   timeout: 15000,
 });
 
-// Request interceptor: dynamically updates baseURL and intercepts mutating calls to static hosts
+// Request interceptor: dynamically updates baseURL and attaches authentication tokens
 api.interceptors.request.use(
   (config) => {
     const activeBase = getApiBaseUrl();
     if (activeBase && activeBase !== '/api') {
       config.baseURL = activeBase;
-    }
-
-    // Intercept mutating requests (POST, PUT, PATCH, DELETE) aimed at static GitHub Pages
-    if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
-      const currentTarget = config.baseURL || activeBase;
-      const isStaticTarget = !currentTarget || currentTarget === '/api' || currentTarget.includes('github.io');
-      const isMutating = config.method && ['post', 'put', 'patch', 'delete'].includes(config.method.toLowerCase());
-
-      if (isStaticTarget && isMutating) {
-        const customUrl = localStorage.getItem('mediverse_api_url');
-        if (!customUrl) {
-          const err = new Error(
-            'GitHub Pages is a static file host and does not execute backend APIs (HTTP 405 Method Not Allowed). A live backend server URL (e.g. Render, Railway, or VPS) must be connected to register accounts and authenticate.'
-          );
-          err.isStaticHostError = true;
-          err.status = 405;
-          err.response = {
-            status: 405,
-            statusText: 'Method Not Allowed',
-            data: {
-              detail:
-                'GitHub Pages is a static file host and cannot execute database operations (HTTP 405). Please connect a deployed backend API URL in Settings or run the backend locally.'
-            }
-          };
-          return Promise.reject(err);
-        }
-      }
     }
 
     const token = localStorage.getItem('pulsecare_token') || localStorage.getItem('telehealth_token');
@@ -85,21 +58,14 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: handles 405 from static hosts and unauthorized 401
+// Response interceptor: handles server errors and unauthorized 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 405) {
-      const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
-      if (isGitHubPages) {
-        const msg =
-          'Static Hosting Notice (HTTP 405): GitHub Pages is serving static frontend assets and rejected the HTTP POST method. A live backend server (FastAPI/Express on Render, Railway, or VPS) is required to process accounts in the database.';
-        error.message = msg;
-        if (error.response.data && typeof error.response.data === 'object') {
-          error.response.data.detail = msg;
-        } else {
-          error.response.data = { detail: msg };
-        }
+      error.message = 'Authentication service is temporarily unavailable. Please try again shortly.';
+      if (error.response.data && typeof error.response.data === 'object') {
+        error.response.data.detail = error.message;
       }
     }
     if (error.response && error.response.status === 401) {

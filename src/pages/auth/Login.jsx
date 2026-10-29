@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Activity, Lock, Mail, ArrowRight, ShieldCheck, Eye, EyeOff, KeyRound, Loader2, AlertCircle, Server, Settings, CheckCircle2 } from 'lucide-react';
+import { Activity, Lock, Mail, ArrowRight, ShieldCheck, Eye, EyeOff, KeyRound, Loader2, AlertCircle } from 'lucide-react';
 import Button from '../../components/Button';
-import { authService, getApiBaseUrl, setApiBaseUrl } from '../../services/api';
+import { authService } from '../../services/api';
 
 export default function Login() {
   const { login, loginWithOtp } = useAuth();
@@ -25,38 +25,6 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [infoMsg, setInfoMsg] = useState('');
-
-  // Production Backend Connection Config
-  const [showApiConfig, setShowApiConfig] = useState(false);
-  const [customApiUrl, setCustomApiUrl] = useState(() => {
-    const current = getApiBaseUrl();
-    return current === '/api' ? '' : current;
-  });
-  const [apiTesting, setApiTesting] = useState(false);
-  const [apiSuccessMsg, setApiSuccessMsg] = useState('');
-  const [apiTestError, setApiTestError] = useState('');
-
-  const handleSaveApiUrl = async () => {
-    setApiTesting(true);
-    setApiSuccessMsg('');
-    setApiTestError('');
-    const target = customApiUrl.trim();
-    if (!target) {
-      setApiBaseUrl('');
-      setApiSuccessMsg('Reset to default relative API (/api).');
-      setApiTesting(false);
-      return;
-    }
-    const res = await authService.testBackendConnection(target);
-    if (res.success) {
-      setApiBaseUrl(target);
-      setApiSuccessMsg('Connected successfully to Mediverse Clinical API!');
-      setError('');
-    } else {
-      setApiTestError(`Unable to connect: ${res.error}. Please verify the backend URL and CORS configuration.`);
-    }
-    setApiTesting(false);
-  };
 
   // Cooldown countdown timer for OTP resend
   useEffect(() => {
@@ -110,9 +78,6 @@ export default function Login() {
     } catch (err) {
       const errMsg = err.response?.data?.detail || err.message || 'Authentication failed. Please verify your email and password.';
       setError(errMsg);
-      if (err.response?.status === 405 || errMsg.includes('405') || errMsg.includes('static')) {
-        setShowApiConfig(true);
-      }
     } finally {
       setLoading(false);
     }
@@ -196,24 +161,6 @@ export default function Login() {
       {/* Main Login Card */}
       <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-5 sm:px-8 shadow-xs border border-slate-200 rounded-2xl">
-          {/* Active Backend Connection Indicator Pill */}
-          <div className="flex items-center justify-between pb-2.5 mb-4 border-b border-slate-100 text-[11px] text-slate-500">
-            <span className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${customApiUrl || getApiBaseUrl() !== '/api' ? 'bg-emerald-500' : 'bg-teal-600'}`}></span>
-              <span className="font-medium text-slate-600">
-                Backend: {customApiUrl || getApiBaseUrl() !== '/api' ? 'Cloud Connected' : 'Mediverse API Service'}
-              </span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowApiConfig(!showApiConfig)}
-              className="text-teal-700 hover:text-teal-800 font-medium hover:underline inline-flex items-center gap-1 cursor-pointer"
-            >
-              <Settings className="w-3 h-3" />
-              {showApiConfig ? 'Close' : 'Configure URL'}
-            </button>
-          </div>
-
           {/* Mode Switcher Tabs */}
           <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-lg mb-6 text-xs">
             <button
@@ -255,69 +202,7 @@ export default function Login() {
           {error && (
             <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <span>{error}</span>
-                {(error.includes('405') || error.includes('static') || error.includes('backend') || error.includes('Method Not Allowed')) && !showApiConfig && (
-                  <button
-                    type="button"
-                    onClick={() => setShowApiConfig(true)}
-                    className="mt-2 block font-semibold text-teal-700 hover:text-teal-800 underline cursor-pointer"
-                  >
-                    Configure Live Backend API URL
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Backend API Configuration Panel */}
-          {showApiConfig && (
-            <div className="mb-5 p-3.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-700">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold flex items-center gap-1 text-slate-800">
-                  <Server className="w-3.5 h-3.5 text-teal-600" />
-                  Cloud Backend Endpoint (Render / Railway / VPS)
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowApiConfig(false)}
-                  className="text-slate-400 hover:text-slate-600 text-xs"
-                >
-                  ✕
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
-                GitHub Pages hosts static assets only. To sign in and query the database in production, connect your live Mediverse backend service.
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="https://your-mediverse-backend.onrender.com/api"
-                  value={customApiUrl}
-                  onChange={(e) => setCustomApiUrl(e.target.value)}
-                  className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:ring-1 focus:ring-teal-500 font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveApiUrl}
-                  disabled={apiTesting}
-                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-md font-medium text-xs flex items-center gap-1 cursor-pointer"
-                >
-                  {apiTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Connect'}
-                </button>
-              </div>
-              {apiSuccessMsg && (
-                <div className="mt-2 text-emerald-700 flex items-center gap-1 font-medium">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  {apiSuccessMsg}
-                </div>
-              )}
-              {apiTestError && (
-                <div className="mt-2 text-rose-600 flex items-start gap-1">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>{apiTestError}</span>
-                </div>
-              )}
+              <span>{error}</span>
             </div>
           )}
 
