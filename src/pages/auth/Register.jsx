@@ -142,6 +142,24 @@ export default function Register() {
       {/* Main Card */}
       <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-lg">
         <div className="bg-white py-8 px-6 shadow-xs border border-slate-200 rounded-xl sm:px-10">
+          {/* Active Backend Connection Indicator Pill */}
+          <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 text-[11px] text-slate-500">
+            <span className="flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${customApiUrl || getApiBaseUrl() !== '/api' ? 'bg-emerald-500' : 'bg-teal-600'}`}></span>
+              <span className="font-medium text-slate-600">
+                Backend: {customApiUrl || getApiBaseUrl() !== '/api' ? 'Cloud Connected' : 'Mediverse API Service'}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowApiConfig(!showApiConfig)}
+              className="text-teal-700 hover:text-teal-800 font-medium hover:underline inline-flex items-center gap-1 cursor-pointer"
+            >
+              <Settings className="w-3 h-3" />
+              {showApiConfig ? 'Close' : 'Configure URL'}
+            </button>
+          </div>
+
           {error && (
             <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">
               <div className="flex items-start gap-2">

@@ -1,23 +1,15 @@
-FROM python:3.11-slim
+FROM node:20-alpine
 
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8000
+COPY package*.json ./
+RUN npm ci --omit=dev
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+COPY api/ ./api/
+COPY data/ ./data/
+COPY server.js ./
 
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+ENV PORT=8080
+EXPOSE 8080
 
-COPY backend/ /app/backend/
-COPY data/ /app/data/
-
-EXPOSE 8000
-
-CMD ["sh", "-c", "python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port ${PORT}"]
-
+CMD ["node", "server.js"]

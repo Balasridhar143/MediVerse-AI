@@ -1,16 +1,15 @@
 services:
   - type: web
     name: mediverse-backend
-    runtime: python
+    runtime: node
     region: oregon
     plan: free
-    buildCommand: pip install -r backend/requirements.txt
-    startCommand: python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    buildCommand: npm install
+    startCommand: node server.js
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9
+      - key: NODE_VERSION
+        value: "20"
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: DATABASE_URL
         sync: false
-

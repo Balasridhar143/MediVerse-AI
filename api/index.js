@@ -6,7 +6,30 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = [
+  'https://balasridhar143.github.io',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://0.0.0.0:3000',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.github.io')) {
+      callback(null, true);
+    } else {
+      callback(null, true);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 
 // Database connection
