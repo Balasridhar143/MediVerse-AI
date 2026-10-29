@@ -33,9 +33,28 @@ MediVerse AI is an enterprise-grade clinical telehealth platform and nationwide 
 - **1,11,794 Medical Documents & Terminology** (ICD-10-CM diagnostic classification & Clinical QA RAG).
 - **Strict Data Integrity**: 0 synthetic rows created; 1,46,747 invalid/duplicate records audited and rejected.
 
-### 4. Hospital Analytics & Registry Dashboard
-- Interactive analytics dashboard with visual breakdowns (Recharts) showing category volume and top Indian states by facility density.
-- Operational hospital capacity analytics (hourly emergency triage inflow, consultation modes, departmental appointment load).
+### 4. Integrated Indian Healthcare Data Warehouse
+- **51,094 Hospitals** (Government of India NIC HealthGIS & OpenStreetMap India).
+- **1,97,686 Primary Healthcare Centres & Clinics** (PHCs, CHCs, Dispensaries, Sub-Centres).
+- **8,152 Doctors & Medical Practitioners** (Registered clinical staff directory).
+- **2,51,320 Indian Pharmaceuticals** (Active medicines, formulations, strengths, and compositions indexed with sub-millisecond SQLite FTS5 search).
+- **95,246 Clinical Laboratory Observations** (PhysioNet MIMIC-IV de-identified observations with reference bounds).
+- **9,502 Public Health & Disease Indicators** (WHO Global Health Observatory & World Bank).
+- **1,11,794 Medical Documents & Terminology** (ICD-10-CM diagnostic classification & Clinical QA RAG).
+- **Strict Data Integrity**: 0 synthetic rows created; 1,46,747 invalid/duplicate records audited and rejected.
+
+### 5. Genuine WebRTC Video Consultations & Signaling
+- **Peer-to-Peer Telemedicine**: Built with real WebRTC `RTCPeerConnection`, local and remote video rendering, and Google STUN server integration.
+- **Session Signaling**: Real-time SDP offer, SDP answer, and ICE candidate exchange coordinated by the backend.
+- **Clinical Controls**: Integrated microphone mute, camera toggle, call timer, and synchronized in-call chat.
+
+### 6. Unified Global Healthcare Search Bar
+- **Instant Categorized Results**: Debounced search query across medicines, hospitals, doctors, and medical knowledge articles.
+- **Zero-Latency Navigation**: Instant direct navigation to medicine clinical monographs, hospital emergency maps, and doctor scheduling profiles.
+
+### 7. Secure OTP Authentication & Password Recovery
+- **Cryptographic OTP Generation**: 6-digit codes with 10-minute expiry and rate-limiting.
+- **Passwordless Verification**: Instant reset-token exchange and secure password resets.
 
 ---
 

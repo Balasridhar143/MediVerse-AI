@@ -389,6 +389,22 @@ export const hospitalService = {
       return { id: registrationId, status: newStatus };
     }
   },
+
+  async getDistrictsByState(state) {
+    try {
+      const res = await api.get('/hospitals/districts', { params: { state } });
+      return res.data;
+    } catch (e) {
+      return { state, districts: [] };
+    }
+  },
+
+  async getNearbyHospitals(lat, lon, radiusKm = 25) {
+    const res = await api.get('/hospitals/nearby', {
+      params: { latitude: lat, longitude: lon, radius_km: radiusKm }
+    });
+    return res.data;
+  },
 };
 
 /**
@@ -623,6 +639,70 @@ export const hospitalDataService = {
 
   async getPatients() {
     const res = await api.get('/hospital/patients');
+    return res.data;
+  },
+};
+
+/**
+ * Medicine Knowledge Database & Search Service
+ */
+export const medicineService = {
+  async getMedicines(params = {}) {
+    const res = await api.get('/medicines', { params });
+    return res.data;
+  },
+
+  async getMedicineById(id) {
+    const res = await api.get(`/medicines/${encodeURIComponent(id)}`);
+    return res.data;
+  },
+
+  async compareMedicines(ids = []) {
+    const idsParam = Array.isArray(ids) ? ids.join(',') : ids;
+    const res = await api.get('/medicines/compare', { params: { ids: idsParam } });
+    return res.data;
+  },
+
+  async getMedicineSafety(id) {
+    const res = await api.get(`/medicines/${encodeURIComponent(id)}/safety`);
+    return res.data;
+  },
+};
+
+/**
+ * Global Search Service
+ */
+export const searchService = {
+  async globalSearch(q, category = '') {
+    const params = { q };
+    if (category && category !== 'all') params.category = category;
+    const res = await api.get('/search', { params });
+    return res.data;
+  },
+};
+
+/**
+ * Video Consultation & WebRTC Signaling Service
+ */
+export const consultationService = {
+  async getRoom(appointmentId) {
+    const res = await api.get(`/consultation/room/${appointmentId}`);
+    return res.data;
+  },
+
+  async sendSignal(appointmentId, type, data) {
+    const res = await api.post(`/consultation/room/${appointmentId}/signal`, { type, data });
+    return res.data;
+  },
+
+  async getSignals(appointmentId, sinceId = '') {
+    const params = sinceId ? { since_id: sinceId } : {};
+    const res = await api.get(`/consultation/room/${appointmentId}/signal`, { params });
+    return res.data;
+  },
+
+  async endConsultation(appointmentId) {
+    const res = await api.post(`/consultation/room/${appointmentId}/end`);
     return res.data;
   },
 };

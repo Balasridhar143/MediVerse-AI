@@ -177,7 +177,7 @@ export default function Appointments() {
 
                     <div className="flex items-center gap-2">
                       {isConfirmed && (
-                        <Link to="/patient/consultations">
+                        <Link to={`/patient/consultation?appointmentId=${apt.id}`}>
                           <Button variant="primary" size="sm" icon={Video}>
                             Join Tele-Room
                           </Button>

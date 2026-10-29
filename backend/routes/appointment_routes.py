@@ -1,0 +1,321 @@
+import uuid
+import datetime
+from typing import Optional, List, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status, Body
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from database import get_db
+import models
+import auth
+
+router = APIRouter(tags=["Appointments & Consultations Workflow"])
+
+@router.post("/appointments", status_code=status.HTTP_201_CREATED)
+def book_appointment(
+    payload: Dict[str, Any] = Body(...),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Patient books a consultation appointment with a doctor.
+    Stores record persistently and dispatches notification to doctor.
+    """
+    # 1. Resolve Doctor
+    doctor_identifier = payload.get("doctor_id") or payload.get("doctor") or ""
+    doctor_name = payload.get("doctor_name") or payload.get("doctor") or "Dr. Arun Kumar"
+    
+    # Try finding doctor user
+    doctor_user = None
+    if doctor_identifier:
+        # Check by user_id or doctor_id or full_name
+        doctor_user = db.query(models.User).filter(
+            models.User.role == "doctor",
+            or_(
+                models.User.id == doctor_identifier,
+                models.User.full_name.ilike(f"%{doctor_identifier}%")
+            )
+        ).first()
+
+    if not doctor_user:
+        # Fall back to default demonstration doctor if booking against directory practitioner
+        doctor_user = db.query(models.User).filter(models.User.role == "doctor").first()
+
+    if not doctor_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Designated doctor is not registered for telehealth appointments."
+        )
+
+    # 2. Extract patient details
+    patient_phone = payload.get("patient_phone") or (current_user.patient_profile.phone if current_user.patient_profile else "+91 98765 43210")
+    patient_email = current_user.email
+    patient_name = current_user.full_name
+
+    # 3. Create appointment
+    apt_id = f"apt_{uuid.uuid4().hex[:8]}"
+    room_id = f"room_{apt_id}"
+    new_apt = models.Appointment(
+        id=apt_id,
+        patient_id=current_user.id,
+        doctor_id=doctor_user.id,
+        doctor_profile_id=getattr(doctor_user.doctor_profile, "id", None) if doctor_user.doctor_profile else None,
+        doctor_name=doctor_name,
+        patient_name=patient_name,
+        patient_phone=patient_phone,
+        patient_email=patient_email,
+        hospital_name=payload.get("hospital") or "City Care Multispeciality Hospital",
+        specialization=payload.get("department") or payload.get("specialization") or "General Medicine",
+        department=payload.get("department") or "General Medicine",
+        appointment_date=payload.get("date") or datetime.date.today().isoformat(),
+        time_slot=payload.get("time") or "10:00 AM",
+        type=payload.get("type") or "Video Consultation",
+        notes=payload.get("notes") or "",
+        status="PENDING",
+        room_id=room_id,
+        created_at=datetime.datetime.utcnow(),
+        updated_at=datetime.datetime.utcnow()
+    )
+    db.add(new_apt)
+    db.flush()
+
+    # 4. Create persistent notification for Doctor
+    notif = models.Notification(
+        id=f"notif_{uuid.uuid4().hex[:8]}",
+        user_id=doctor_user.id,
+        type="APPOINTMENT_REQUEST",
+        title="New Consultation Request",
+        message=f"{patient_name} requested a {new_apt.type} on {new_apt.appointment_date} at {new_apt.time_slot}.",
+        entity_id=new_apt.id,
+        link_url="/doctor/dashboard",
+        is_read=False,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(notif)
+    db.commit()
+
+    return {
+        "id": new_apt.id,
+        "patientId": new_apt.patient_id,
+        "doctorId": new_apt.doctor_id,
+        "doctorName": new_apt.doctor_name,
+        "patientName": new_apt.patient_name,
+        "hospital": new_apt.hospital_name,
+        "specialization": new_apt.specialization,
+        "department": new_apt.department,
+        "date": new_apt.appointment_date,
+        "time": new_apt.time_slot,
+        "type": new_apt.type,
+        "notes": new_apt.notes,
+        "status": new_apt.status,
+        "roomId": new_apt.room_id,
+        "createdAt": new_apt.created_at.isoformat()
+    }
+
+@router.get("/appointments/my-appointments")
+def get_my_appointments(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve logged-in patient's appointments.
+    """
+    apts = db.query(models.Appointment).filter(
+        models.Appointment.patient_id == current_user.id
+    ).order_by(models.Appointment.created_at.desc()).all()
+
+    return [
+        {
+            "id": a.id,
+            "patientId": a.patient_id,
+            "doctorId": a.doctor_id,
+            "doctorName": a.doctor_name,
+            "patientName": a.patient_name,
+            "hospital": a.hospital_name,
+            "specialization": a.specialization,
+            "department": a.department,
+            "date": a.appointment_date,
+            "time": a.time_slot,
+            "type": a.type,
+            "notes": a.notes,
+            "status": a.status,
+            "roomId": a.room_id,
+            "rejection_reason": a.rejection_reason,
+            "createdAt": a.created_at.isoformat() if a.created_at else None
+        }
+        for a in apts
+    ]
+
+@router.get("/doctor/appointments")
+def get_doctor_appointments(
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieve logged-in doctor's appointments.
+    """
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only doctors can view clinical schedule.")
+
+    apts = db.query(models.Appointment).filter(
+        models.Appointment.doctor_id == current_user.id
+    ).order_by(models.Appointment.created_at.desc()).all()
+
+    return [
+        {
+            "id": a.id,
+            "patientId": a.patient_id,
+            "doctorId": a.doctor_id,
+            "doctorName": a.doctor_name,
+            "patientName": a.patient_name,
+            "patientPhone": a.patient_phone,
+            "patientEmail": a.patient_email,
+            "hospital": a.hospital_name,
+            "specialization": a.specialization,
+            "department": a.department,
+            "date": a.appointment_date,
+            "time": a.time_slot,
+            "type": a.type,
+            "notes": a.notes,
+            "chiefComplaint": a.notes or "General clinical checkup",
+            "status": a.status,
+            "roomId": a.room_id,
+            "createdAt": a.created_at.isoformat() if a.created_at else None
+        }
+        for a in apts
+    ]
+
+@router.patch("/appointments/{appointment_id}/accept")
+def accept_appointment(
+    appointment_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Doctor approves an appointment request. Status updates to CONFIRMED.
+    Dispatches real-time notification to patient with room access.
+    """
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only doctors may accept appointments.")
+
+    apt = db.query(models.Appointment).filter(
+        models.Appointment.id == appointment_id,
+        models.Appointment.doctor_id == current_user.id
+    ).first()
+
+    if not apt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+
+    apt.status = "CONFIRMED"
+    if not apt.room_id:
+        apt.room_id = f"room_{apt.id}"
+    apt.updated_at = datetime.datetime.utcnow()
+
+    # Notify patient
+    notif = models.Notification(
+        id=f"notif_{uuid.uuid4().hex[:8]}",
+        user_id=apt.patient_id,
+        type="APPOINTMENT_CONFIRMED",
+        title="Appointment Confirmed",
+        message=f"Dr. {current_user.full_name} has accepted your consultation for {apt.appointment_date} at {apt.time_slot}. Tele-Room is ready.",
+        entity_id=apt.id,
+        link_url=f"/patient/consultations?appointmentId={apt.id}",
+        is_read=False,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(notif)
+    db.commit()
+
+    return {
+        "success": True,
+        "message": "Appointment approved successfully.",
+        "appointment": {
+            "id": apt.id,
+            "status": apt.status,
+            "roomId": apt.room_id
+        }
+    }
+
+@router.patch("/appointments/{appointment_id}/reject")
+def reject_appointment(
+    appointment_id: str,
+    payload: Dict[str, Any] = Body(...),
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Doctor declines an appointment request with an optional reason.
+    """
+    if current_user.role != "doctor":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only doctors may decline appointments.")
+
+    apt = db.query(models.Appointment).filter(
+        models.Appointment.id == appointment_id,
+        models.Appointment.doctor_id == current_user.id
+    ).first()
+
+    if not apt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+
+    reason = payload.get("reason", "Clinician schedule conflict").strip()
+    apt.status = "REJECTED"
+    apt.rejection_reason = reason
+    apt.updated_at = datetime.datetime.utcnow()
+
+    # Notify patient
+    notif = models.Notification(
+        id=f"notif_{uuid.uuid4().hex[:8]}",
+        user_id=apt.patient_id,
+        type="APPOINTMENT_REJECTED",
+        title="Appointment Declined",
+        message=f"Dr. {current_user.full_name} was unable to accept your request. Reason: {reason}",
+        entity_id=apt.id,
+        link_url="/patient/appointments",
+        is_read=False,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(notif)
+    db.commit()
+
+    return {"success": True, "message": "Appointment declined.", "status": "REJECTED"}
+
+@router.patch("/appointments/{appointment_id}/cancel")
+def cancel_appointment(
+    appointment_id: str,
+    current_user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Patient cancels their appointment request.
+    """
+    apt = db.query(models.Appointment).filter(
+        models.Appointment.id == appointment_id,
+        or_(
+            models.Appointment.patient_id == current_user.id,
+            models.Appointment.doctor_id == current_user.id
+        )
+    ).first()
+
+    if not apt:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Appointment not found.")
+
+    apt.status = "CANCELLED"
+    apt.updated_at = datetime.datetime.utcnow()
+
+    # Notify counterpart
+    target_user_id = apt.doctor_id if current_user.id == apt.patient_id else apt.patient_id
+    notif = models.Notification(
+        id=f"notif_{uuid.uuid4().hex[:8]}",
+        user_id=target_user_id,
+        type="APPOINTMENT_CANCELLED",
+        title="Appointment Cancelled",
+        message=f"Consultation on {apt.appointment_date} at {apt.time_slot} was cancelled by {current_user.full_name}.",
+        entity_id=apt.id,
+        link_url="/patient/appointments" if current_user.role == "doctor" else "/doctor/dashboard",
+        is_read=False,
+        created_at=datetime.datetime.utcnow()
+    )
+    db.add(notif)
+    db.commit()
+
+    return {"success": True, "message": "Appointment cancelled successfully."}
+

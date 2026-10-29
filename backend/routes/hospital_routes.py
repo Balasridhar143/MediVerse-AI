@@ -92,24 +92,90 @@ def list_hospitals(
             for f in facilities
         ]
     else:
+        clean_q = re.sub(r'[^\w\s]', '', q).strip() if q else ""
+        if clean_q and not state and not district and not facility_type and not has_coords:
+            # High-speed FTS5 index lookup
+            try:
+                from sqlalchemy import text
+                fts_query = f"{clean_q}*"
+                count_res = db.execute(
+                    text("SELECT count(*) FROM hospitals_fts WHERE hospitals_fts MATCH :q"),
+                    {"q": fts_query}
+                ).scalar() or 0
+
+                offset = (page - 1) * limit
+                hosp_rows = db.execute(
+                    text("""
+                        SELECT h.id, h.hospital_name, h.facility_type, h.ownership_type, h.address,
+                               h.city, h.district, h.state, h.postal_code, h.phone, h.emergency_phone,
+                               h.website, h.latitude, h.longitude, h.departments, h.available_beds,
+                               h.available_doctors, h.emergency_availability, h.source, h.source_record_id,
+                               h.source_url, h.last_verification_date, h.created_at
+                        FROM hospitals_fts f
+                        JOIN hospitals h ON h.rowid = f.rowid
+                        WHERE hospitals_fts MATCH :q
+                        LIMIT :limit OFFSET :offset
+                    """),
+                    {"q": fts_query, "limit": limit, "offset": offset}
+                ).fetchall()
+
+                items = [
+                    type('HospitalItem', (), {
+                        "id": r[0],
+                        "hospital_name": r[1],
+                        "facility_type": r[2],
+                        "ownership_type": r[3],
+                        "address": r[4],
+                        "city": r[5],
+                        "district": r[6],
+                        "state": r[7],
+                        "postal_code": r[8],
+                        "phone": r[9],
+                        "emergency_phone": r[10],
+                        "website": r[11],
+                        "latitude": r[12],
+                        "longitude": r[13],
+                        "departments": r[14],
+                        "available_beds": r[15],
+                        "available_doctors": r[16],
+                        "emergency_availability": r[17],
+                        "source": r[18],
+                        "source_record_id": r[19],
+                        "source_url": r[20],
+                        "last_verification_date": r[21],
+                        "created_at": r[22]
+                    })()
+                    for r in hosp_rows
+                ]
+
+                total_pages = max(1, math.ceil(count_res / limit)) if count_res > 0 else 1
+                return {
+                    "items": items,
+                    "total": count_res,
+                    "page": page,
+                    "page_size": limit,
+                    "total_pages": total_pages,
+                }
+            except Exception as e:
+                print(f"[Hospital FTS Fallback] {e}")
+
         query = db.query(models.Hospital)
         if q:
             sp = f"%{q.strip()}%"
             query = query.filter(
                 or_(
-                    models.Hospital.hospital_name.ilike(sp),
-                    models.Hospital.city.ilike(sp),
-                    models.Hospital.district.ilike(sp),
-                    models.Hospital.address.ilike(sp),
-                    models.Hospital.departments.ilike(sp)
+                    models.Hospital.hospital_name.like(sp),
+                    models.Hospital.city.like(sp),
+                    models.Hospital.district.like(sp),
+                    models.Hospital.address.like(sp)
                 )
             )
         if state and state.lower() != "all":
-            query = query.filter(models.Hospital.state.ilike(state.strip()))
+            query = query.filter(models.Hospital.state == state.strip())
         if district and district.lower() != "all":
-            query = query.filter(models.Hospital.district.ilike(district.strip()))
+            query = query.filter(models.Hospital.district == district.strip())
         if facility_type and facility_type.lower() != "all":
-            query = query.filter(models.Hospital.facility_type.ilike(f"%{facility_type.strip()}%"))
+            query = query.filter(models.Hospital.facility_type.like(f"%{facility_type.strip()}%"))
         if has_coords:
             query = query.filter(
                 models.Hospital.latitude.isnot(None),
@@ -117,7 +183,7 @@ def list_hospitals(
             )
         total = query.count()
         offset = (page - 1) * limit
-        items = query.order_by(models.Hospital.state.asc(), models.Hospital.hospital_name.asc()).offset(offset).limit(limit).all()
+        items = query.order_by(models.Hospital.hospital_name.asc()).offset(offset).limit(limit).all()
 
     total_pages = max(1, math.ceil(total / limit)) if total > 0 else 1
 
@@ -337,3 +403,78 @@ def update_registration_status(
     db.commit()
     db.refresh(reg)
     return reg
+
+@router.get("/hospitals/districts")
+def get_districts_by_state(
+    state: str = Query(..., description="Indian State to fetch districts for"),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns authentic verified districts for a selected Indian State.
+    """
+    clean_state = state.strip()
+    # Query distinct districts in this state from hospitals
+    rows = db.query(models.Hospital.district).distinct().filter(
+        models.Hospital.state.ilike(clean_state),
+        models.Hospital.district.isnot(None)
+    ).all()
+    districts = sorted(list({r[0].strip() for r in rows if r[0] and len(r[0].strip()) > 1 and r[0].strip().lower() != clean_state.lower()}))
+    return {
+        "state": clean_state,
+        "districts": districts
+    }
+
+@router.get("/hospitals/nearby")
+def get_nearby_hospitals(
+    latitude: float = Query(..., ge=-90, le=90),
+    longitude: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(25.0, ge=1, le=200),
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db)
+):
+    """
+    Computes geographical Haversine distance to find closest accredited hospitals.
+    """
+    # Approximate degree bounding box for fast query filtering
+    lat_delta = radius_km / 111.0
+    lon_delta = radius_km / (111.0 * max(0.1, math.cos(math.radians(latitude))))
+
+    candidates = db.query(models.Hospital).filter(
+        models.Hospital.latitude.between(latitude - lat_delta, latitude + lat_delta),
+        models.Hospital.longitude.between(longitude - lon_delta, longitude + lon_delta)
+    ).limit(200).all()
+
+    # Exact Haversine formula calculation
+    hospitals_with_distance = []
+    r_earth = 6371.0 # km
+    for h in candidates:
+        if h.latitude is None or h.longitude is None:
+            continue
+        d_lat = math.radians(h.latitude - latitude)
+        d_lon = math.radians(h.longitude - longitude)
+        a = (math.sin(d_lat / 2) ** 2 +
+             math.cos(math.radians(latitude)) * math.cos(math.radians(h.latitude)) * math.sin(d_lon / 2) ** 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        distance = round(r_earth * c, 2)
+        if distance <= radius_km:
+            hospitals_with_distance.append({
+                "id": h.id,
+                "hospital_name": h.hospital_name,
+                "facility_type": h.facility_type,
+                "ownership_type": h.ownership_type,
+                "address": h.address,
+                "city": h.city,
+                "district": h.district,
+                "state": h.state,
+                "phone": h.phone or "+91 Emergency Desk",
+                "emergency_phone": h.emergency_phone or "108",
+                "latitude": h.latitude,
+                "longitude": h.longitude,
+                "departments": h.departments,
+                "emergency_availability": h.emergency_availability,
+                "distance_km": distance,
+                "source": h.source
+            })
+
+    hospitals_with_distance.sort(key=lambda x: x["distance_km"])
+    return hospitals_with_distance[:limit]

@@ -1,46 +1,76 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams, Link } from 'react-router-dom';
+import { appointmentService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import StatusBadge from '../../components/StatusBadge';
+import WebRTCConsultationRoom from '../../components/WebRTCConsultationRoom';
 import {
   Video,
-  Mic,
-  MicOff,
-  VideoOff,
-  PhoneOff,
   FileText,
-  Send,
+  Calendar,
+  Clock,
   User,
   ShieldCheck,
+  Stethoscope,
+  Loader2,
+  AlertCircle,
+  ExternalLink,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
 
 export default function DoctorConsultations() {
-  const [inCall, setInCall] = useState(false);
-  const [micActive, setMicActive] = useState(true);
-  const [videoActive, setVideoActive] = useState(true);
-  const [doctorNotes, setDoctorNotes] = useState('');
-  const [sessionNotes, setSessionNotes] = useState([
-    'Patient logged morning BP: 126/82 mmHg.',
-    'Reviewing 4-week Telmisartan 40mg response.',
-  ]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlAppointmentId = searchParams.get('appointmentId');
 
-  const handleAddNote = (e) => {
-    e.preventDefault();
-    if (!doctorNotes.trim()) return;
-    setSessionNotes([...sessionNotes, doctorNotes]);
-    setDoctorNotes('');
+  const [appointments, setAppointments] = useState([]);
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState(urlAppointmentId || '');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchAppointments = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await appointmentService.getDoctorAppointments();
+        const list = Array.isArray(data) ? data : [];
+        // Prioritize confirmed/upcoming appointments
+        const activeList = list.filter(
+          (a) => a.status === 'CONFIRMED' || a.status === 'UPCOMING' || a.status === 'IN_PROGRESS'
+        );
+        const fullList = activeList.length > 0 ? activeList : list;
+        setAppointments(fullList);
+
+        if (!urlAppointmentId && fullList.length > 0) {
+          const first = fullList[0];
+          setSelectedAppointmentId(first.id);
+          setSearchParams({ appointmentId: first.id }, { replace: true });
+        }
+      } catch (err) {
+        console.warn('Could not fetch doctor appointments:', err);
+        setError(err.response?.data?.detail || 'Failed to load clinician appointments.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAppointments();
+  }, [urlAppointmentId]);
+
+  const handleSelectAppointment = (id) => {
+    setSelectedAppointmentId(id);
+    setSearchParams({ appointmentId: id });
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-7xl mx-auto pb-10">
       {/* Page Header */}
       <PageHeader
         badge="Telemedicine Suite"
-        badgeStatus={inCall ? 'Session Live' : 'Room Ready'}
+        badgeStatus="Live Clinical Room"
         title="Clinician Tele-Consultation Room"
-        subtitle="Connecting with Rahul Sharma (PID-2026-089) • Session #APT-101 (Demo consultation room)"
+        subtitle="End-to-end WebRTC peer-to-peer telemedicine session with your patient"
         action={
           <div className="flex items-center gap-2">
             <Link to="/doctor/clinical-context">
@@ -57,110 +87,68 @@ export default function DoctorConsultations() {
         }
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Video Area */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="bg-slate-900 rounded-xl overflow-hidden aspect-video flex flex-col items-center justify-center relative border border-slate-800 shadow-md">
-            {inCall ? (
-              <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center text-white relative">
-                <div className="w-20 h-20 rounded-full bg-teal-700 flex items-center justify-center text-2xl font-bold mb-3 border-2 border-teal-400">
-                  RS
-                </div>
-                <h3 className="text-base font-semibold">Rahul Sharma</h3>
-                <p className="text-xs text-slate-400">42y / Male • PID-2026-089</p>
-                <span className="absolute top-4 left-4 bg-emerald-600/90 text-white text-[11px] px-2.5 py-1 rounded flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-white animate-pulse"></span> Patient Connected (Demo Live 04:12)
-                </span>
-
-                <div className="absolute bottom-4 right-4 w-32 aspect-video bg-slate-800 rounded-lg border border-slate-700 flex items-center justify-center text-[10px] text-slate-300">
-                  Dr. Ananya Sen (You)
-                </div>
-              </div>
-            ) : (
-              <div className="text-center p-6 text-slate-400 space-y-3">
-                <div className="w-16 h-16 rounded-full bg-slate-800 flex items-center justify-center mx-auto text-teal-400 border border-slate-700">
-                  <Video className="w-8 h-8" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-white">Telemedicine Session Waiting Room</h3>
-                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                    Patient <strong>Rahul Sharma</strong> is in the waiting queue.
-                  </p>
-                </div>
-                <Button
-                  variant="primary"
-                  size="md"
-                  icon={Video}
-                  onClick={() => setInCall(true)}
-                  className="mt-2"
-                >
-                  Connect Tele-Consultation
-                </Button>
-              </div>
-            )}
-
-            {inCall && (
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur-xs px-4 py-2 rounded-xl flex items-center gap-3 border border-slate-700">
-                <button
-                  onClick={() => setMicActive(!micActive)}
-                  className={`p-2 rounded-lg cursor-pointer transition-colors ${
-                    micActive ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-rose-600 text-white'
-                  }`}
-                  title="Toggle Mic"
-                >
-                  {micActive ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                </button>
-
-                <button
-                  onClick={() => setVideoActive(!videoActive)}
-                  className={`p-2 rounded-lg cursor-pointer transition-colors ${
-                    videoActive ? 'bg-slate-700 text-white hover:bg-slate-600' : 'bg-rose-600 text-white'
-                  }`}
-                  title="Toggle Camera"
-                >
-                  {videoActive ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
-                </button>
-
-                <button
-                  onClick={() => setInCall(false)}
-                  className="p-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white cursor-pointer transition-colors"
-                  title="End Consultation"
-                >
-                  <PhoneOff className="w-4 h-4" />
-                </button>
-              </div>
-            )}
+      {loading ? (
+        <Card className="p-12 text-center text-slate-500">
+          <Loader2 className="w-8 h-8 text-teal-600 animate-spin mx-auto mb-3" />
+          <p className="font-semibold text-slate-700">Connecting to Clinician Telemedicine Gateway...</p>
+        </Card>
+      ) : appointments.length === 0 ? (
+        <Card className="p-10 text-center">
+          <div className="w-16 h-16 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center mx-auto mb-3 border border-teal-100">
+            <Video className="w-8 h-8" />
           </div>
-        </div>
-
-        {/* Session Clinical Notes */}
+          <h3 className="font-bold text-slate-900 text-base">No Confirmed Tele-Consultations</h3>
+          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+            You do not currently have any confirmed video consultations scheduled on your roster. New patient bookings will appear on your dashboard.
+          </p>
+          <div className="mt-4">
+            <Link to="/doctor/dashboard">
+              <Button variant="primary" size="sm">
+                View Doctor Dashboard
+              </Button>
+            </Link>
+          </div>
+        </Card>
+      ) : (
         <div className="space-y-4">
-          <Card title="Session Clinical Notes" icon={FileText}>
-            <div className="space-y-3 text-xs">
-              <div className="h-44 overflow-y-auto space-y-2 pr-1">
-                {sessionNotes.map((note, idx) => (
-                  <div key={idx} className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 leading-relaxed">
-                    {note}
-                  </div>
-                ))}
-              </div>
-
-              <form onSubmit={handleAddNote} className="flex gap-2 pt-2 border-t border-slate-100">
-                <input
-                  type="text"
-                  value={doctorNotes}
-                  onChange={(e) => setDoctorNotes(e.target.value)}
-                  placeholder="Record clinical finding..."
-                  className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-lg bg-white focus:border-teal-500"
-                />
-                <Button type="submit" variant="primary" size="sm" icon={Send}>
-                  Save
-                </Button>
-              </form>
+          {/* Patient Switcher */}
+          {appointments.length > 1 && (
+            <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center gap-2 overflow-x-auto text-xs">
+              <span className="font-semibold text-slate-600 shrink-0">Consultation Roster:</span>
+              {appointments.map((apt) => {
+                const isSelected = apt.id === selectedAppointmentId;
+                return (
+                  <button
+                    key={apt.id}
+                    onClick={() => handleSelectAppointment(apt.id)}
+                    className={`px-3 py-1.5 rounded-lg border font-medium whitespace-nowrap transition-colors cursor-pointer flex items-center gap-2 ${
+                      isSelected
+                        ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                        : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    <User className="w-3.5 h-3.5" />
+                    <span>{apt.patientName || 'Patient'}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                      isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {apt.date} {apt.time}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          </Card>
+          )}
+
+          {/* WebRTC Video Consultation Room */}
+          {selectedAppointmentId && (
+            <WebRTCConsultationRoom
+              appointmentId={selectedAppointmentId}
+              userRole="doctor"
+            />
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

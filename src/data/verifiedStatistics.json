@@ -28,58 +28,40 @@
     "facilities_with_valid_coordinates": 241552,
     "hospitals_with_valid_coordinates": 46810,
     "other_facilities_with_valid_coordinates": 194742,
-    "states_and_uts_represented_count": 51,
+    "states_and_uts_represented_count": 33,
     "states_list": [
-      "Andaman & Nicobar",
       "Andaman and Nicobar Islands",
       "Andhra Pradesh",
-      "Arun\u0101chal Pradesh",
+      "Arunachal Pradesh",
       "Assam",
       "Bihar",
-      "Bih\u0101r",
-      "Chand\u012bgarh",
-      "Chattisgarh",
-      "Chhatt\u012bsgarh",
-      "Dadar & Nagar Haveli",
-      "Daman & Diu",
+      "Chhattisgarh",
+      "Dadra and Nagar Haveli and Daman and Diu",
       "Delhi",
-      "D\u0101dra And Nagar Haveli And Dam\u0101n And Diu",
       "Goa",
       "Gujarat",
-      "Gujar\u0101t",
       "Haryana",
-      "Hary\u0101na",
-      "Him\u0101chal Pradesh",
+      "Himachal Pradesh",
       "Jharkhand",
-      "Jh\u0101rkhand",
       "Karnataka",
-      "Karn\u0101taka",
       "Kerala",
       "Lakshadweep",
       "Madhya Pradesh",
       "Maharashtra",
-      "Mah\u0101r\u0101shtra",
       "Manipur",
-      "Megh\u0101laya",
+      "Meghalaya",
       "Mizoram",
-      "N\u0101g\u0101land",
+      "Nagaland",
       "Odisha",
-      "Orissa",
-      "Pondicherry",
       "Puducherry",
       "Punjab",
       "Rajasthan",
-      "R\u0101jasth\u0101n",
       "Sikkim",
-      "Tamil N\u0101du",
-      "Tamilnadu",
+      "Tamil Nadu",
       "Telangana",
-      "Telang\u0101na",
       "Tripura",
       "Uttar Pradesh",
       "Uttarakhand",
-      "Uttarpradesh",
-      "Uttar\u0101khand",
       "West Bengal"
     ],
     "top_15_states": [
@@ -100,7 +82,7 @@
         "facility_count": 13965
       },
       {
-        "state": "Mah\u0101r\u0101shtra",
+        "state": "Mahārāshtra",
         "facility_count": 13521
       },
       {
@@ -108,7 +90,7 @@
         "facility_count": 12635
       },
       {
-        "state": "Tamil N\u0101du",
+        "state": "Tamil Nādu",
         "facility_count": 10358
       },
       {
@@ -124,7 +106,7 @@
         "facility_count": 8605
       },
       {
-        "state": "Telang\u0101na",
+        "state": "Telangāna",
         "facility_count": 8477
       },
       {
@@ -136,11 +118,11 @@
         "facility_count": 8195
       },
       {
-        "state": "Gujar\u0101t",
+        "state": "Gujarāt",
         "facility_count": 8038
       },
       {
-        "state": "Karn\u0101taka",
+        "state": "Karnātaka",
         "facility_count": 7679
       }
     ]

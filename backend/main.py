@@ -11,7 +11,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from database import engine, Base, SessionLocal
 import models
 import auth
-from routes import auth_routes, patient_routes, hospital_routes, report_routes, rag_routes
+from routes import (
+    auth_routes,
+    patient_routes,
+    hospital_routes,
+    report_routes,
+    rag_routes,
+    medicine_routes,
+    doctor_routes,
+    appointment_routes,
+    consultation_routes,
+    notification_routes,
+    search_routes,
+)
 
 # Create all database tables automatically on startup
 Base.metadata.create_all(bind=engine)
@@ -48,6 +60,12 @@ app.include_router(hospital_routes.router, prefix="/api")
 app.include_router(patient_routes.router, prefix="/api")
 app.include_router(report_routes.router, prefix="/api")
 app.include_router(rag_routes.router, prefix="/api")
+app.include_router(medicine_routes.router, prefix="/api")
+app.include_router(doctor_routes.router, prefix="/api")
+app.include_router(appointment_routes.router, prefix="/api")
+app.include_router(consultation_routes.router, prefix="/api")
+app.include_router(notification_routes.router, prefix="/api")
+app.include_router(search_routes.router, prefix="/api")
 
 @app.get("/api/health")
 def health_check():

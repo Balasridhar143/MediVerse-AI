@@ -341,7 +341,7 @@ export default function DoctorDashboard() {
                           </Button>
                         </Link>
 
-                        <Link to="/doctor/consultations">
+                        <Link to={`/doctor/consultations?appointmentId=${apt.id}`}>
                           <Button variant="primary" size="sm" icon={Video}>
                             Join Room
                           </Button>

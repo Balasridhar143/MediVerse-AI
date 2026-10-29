@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import L from 'leaflet';
 import { hospitalService, patientService } from '../../services/api';
+import indianLocationData from '../../data/indianLocationRegistry.json';
 import { useAuth } from '../../context/AuthContext';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -35,7 +36,9 @@ const customIcon = L.icon({
 
 export default function FindHospital() {
   const { user } = useAuth();
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchParams] = useSearchParams();
+  const initialSearch = searchParams.get('search') || '';
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -43,11 +46,13 @@ export default function FindHospital() {
   const [userLocation, setUserLocation] = useState(null);
   const [locationStatus, setLocationStatus] = useState('');
 
-  // State & Filter Management
+  // State & Filter Management (Normalized Indian Location Hierarchy)
   const [selectedState, setSelectedState] = useState('');
+  const [selectedDistrict, setSelectedDistrict] = useState('');
   const [selectedType, setSelectedType] = useState('');
   const [onlyWithCoords, setOnlyWithCoords] = useState(false);
-  const [availableStates, setAvailableStates] = useState([]);
+  const [availableStates, setAvailableStates] = useState(indianLocationData.all_states || []);
+  const [availableDistricts, setAvailableDistricts] = useState([]);
   const [availableTypes, setAvailableTypes] = useState([]);
 
   // Pagination State
@@ -106,6 +111,30 @@ export default function FindHospital() {
     fetchMetadata();
   }, []);
 
+  // When selectedState changes, update availableDistricts
+  const handleStateChange = async (newState) => {
+    setSelectedState(newState);
+    setSelectedDistrict('');
+    setPage(1);
+
+    if (!newState || newState === 'All States') {
+      setAvailableDistricts([]);
+      return;
+    }
+
+    const localDistricts = indianLocationData.districts_by_state?.[newState];
+    if (localDistricts && localDistricts.length > 0) {
+      setAvailableDistricts(localDistricts);
+    } else {
+      try {
+        const res = await hospitalService.getDistrictsByState(newState);
+        setAvailableDistricts(res.districts || []);
+      } catch (e) {
+        setAvailableDistricts([]);
+      }
+    }
+  };
+
   // 2. Fetch Hospitals with server-side filters & pagination
   const fetchHospitals = async () => {
     try {
@@ -114,6 +143,7 @@ export default function FindHospital() {
       const params = {
         q: searchTerm || undefined,
         state: selectedState && selectedState !== 'All States' ? selectedState : undefined,
+        district: selectedDistrict && selectedDistrict !== 'All Districts' ? selectedDistrict : undefined,
         facility_type: selectedType && selectedType !== 'All Facilities' ? selectedType : undefined,
         has_coords: onlyWithCoords ? true : undefined,
         page: page,
@@ -145,7 +175,7 @@ export default function FindHospital() {
 
   useEffect(() => {
     fetchHospitals();
-  }, [searchTerm, selectedState, selectedType, onlyWithCoords, page, pageSize]);
+  }, [searchTerm, selectedState, selectedDistrict, selectedType, onlyWithCoords, page, pageSize]);
 
   // Reset page to 1 when filters change
   const handleFilterChange = (setter, value) => {
@@ -392,13 +422,32 @@ export default function FindHospital() {
         <div className="min-w-[160px]">
           <select
             value={selectedState}
-            onChange={(e) => handleFilterChange(setSelectedState, e.target.value)}
+            onChange={(e) => handleStateChange(e.target.value)}
             className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:border-teal-500 focus:outline-hidden"
           >
             <option value="">All States / UTs ({availableStates.length})</option>
             {availableStates.map((st) => (
               <option key={st} value={st}>
                 {st}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Cascading District Filter */}
+        <div className="min-w-[160px]">
+          <select
+            value={selectedDistrict}
+            onChange={(e) => handleFilterChange(setSelectedDistrict, e.target.value)}
+            disabled={!selectedState || availableDistricts.length === 0}
+            className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:border-teal-500 focus:outline-hidden disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <option value="">
+              {!selectedState ? 'Select State first' : `All Districts (${availableDistricts.length})`}
+            </option>
+            {availableDistricts.map((dist) => (
+              <option key={dist} value={dist}>
+                {dist}
               </option>
             ))}
           </select>

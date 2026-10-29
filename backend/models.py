@@ -16,6 +16,7 @@ class User(Base):
 
     # Relationships
     patient_profile = relationship("Patient", back_populates="user", uselist=False)
+    doctor_profile = relationship("Doctor", back_populates="user", uselist=False)
     hospital = relationship("Hospital", back_populates="staff_users")
 
 class Hospital(Base):
@@ -297,3 +298,100 @@ class MedicalReport(Base):
 
     # Relationships
     patient = relationship("Patient", back_populates="reports")
+
+
+class Doctor(Base):
+    __tablename__ = "doctors"
+
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), ForeignKey("users.id"), unique=True, nullable=True)
+    full_name = Column(String(128), nullable=False, index=True)
+    specialization = Column(String(128), default="General Medicine", index=True)
+    license_number = Column(String(128), nullable=True)
+    hospital_id = Column(String(64), ForeignKey("hospitals.id"), nullable=True)
+    hospital_name = Column(String(256), nullable=True)
+    experience_years = Column(Integer, default=5)
+    rating = Column(Float, default=4.8)
+    review_count = Column(Integer, default=12)
+    consultation_fee = Column(Float, default=500.00)
+    about = Column(Text, nullable=True)
+    available_days = Column(Text, default='["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]')
+    available_slots = Column(Text, default='["09:00 AM", "10:00 AM", "11:00 AM", "02:00 PM", "03:00 PM", "04:00 PM"]')
+    consultation_types = Column(Text, default='["Video Consultation", "In-Person"]')
+    department = Column(String(128), default="General Medicine")
+    location = Column(String(256), default="Main Campus, Sector 4")
+    qualifications = Column(String(256), default="MBBS, MD")
+    is_available = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="doctor_profile")
+
+
+class Appointment(Base):
+    __tablename__ = "appointments"
+
+    id = Column(String(64), primary_key=True, index=True)
+    patient_id = Column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    doctor_id = Column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    doctor_profile_id = Column(String(64), nullable=True)
+    doctor_name = Column(String(128), nullable=False)
+    patient_name = Column(String(128), nullable=False)
+    patient_phone = Column(String(32), nullable=True)
+    patient_email = Column(String(128), nullable=True)
+    hospital_name = Column(String(256), nullable=True)
+    specialization = Column(String(128), nullable=True)
+    department = Column(String(128), default="General Medicine")
+    appointment_date = Column(String(32), nullable=False)
+    time_slot = Column(String(32), nullable=False)
+    type = Column(String(64), default="Video Consultation")
+    notes = Column(Text, nullable=True)
+    status = Column(String(32), default="PENDING", index=True)  # PENDING, CONFIRMED, REJECTED, CANCELLED, COMPLETED
+    rejection_reason = Column(Text, nullable=True)
+    room_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    patient_user = relationship("User", foreign_keys=[patient_id])
+    doctor_user = relationship("User", foreign_keys=[doctor_id])
+
+
+class OTP(Base):
+    __tablename__ = "otps"
+
+    id = Column(String(64), primary_key=True, index=True)
+    email = Column(String(128), nullable=False, index=True)
+    otp_code = Column(String(16), nullable=False)
+    purpose = Column(String(32), default="PASSWORD_RESET")
+    attempts = Column(Integer, default=0)
+    is_used = Column(Boolean, default=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(String(64), primary_key=True, index=True)
+    user_id = Column(String(64), ForeignKey("users.id"), nullable=False, index=True)
+    type = Column(String(64), nullable=False)
+    title = Column(String(256), nullable=False)
+    message = Column(Text, nullable=False)
+    entity_id = Column(String(64), nullable=True)
+    link_url = Column(String(256), nullable=True)
+    is_read = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    user = relationship("User")
+
+
+class ConsultationSignal(Base):
+    __tablename__ = "consultation_signals"
+
+    id = Column(String(64), primary_key=True, index=True)
+    room_id = Column(String(64), nullable=False, index=True)
+    sender_id = Column(String(64), nullable=False)
+    sender_role = Column(String(32), nullable=False)
+    signal_type = Column(String(32), nullable=False)  # 'offer', 'answer', 'candidate', 'join', 'leave'
+    signal_data = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

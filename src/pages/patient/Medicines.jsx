@@ -8,6 +8,7 @@ import MedicineCard from '../../components/MedicineCard';
 import ReminderModal from '../../components/ReminderModal';
 import LanguageSelector from '../../components/LanguageSelector';
 import EasyExplanation from '../../components/EasyExplanation';
+import MedicineDatabaseViewer from '../../components/MedicineDatabaseViewer';
 import {
   Pill,
   Clock,
@@ -21,6 +22,8 @@ import {
   Sparkles,
   HelpCircle,
   BookOpen,
+  Search,
+  Database,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
@@ -46,6 +49,7 @@ import { getTranslation, getLanguageConfig } from '../../utils/languageRegistry'
  * - Smart medication adherence counters (Today & This Week)
  */
 export default function Medicines() {
+  const [activeTab, setActiveTab] = useState('database'); // 'database' | 'regimen'
   const [medicinesList, setMedicinesList] = useState(mockMedicines);
   const [activeModalMed, setActiveModalMed] = useState(null);
   const [snoozeNotice, setSnoozeNotice] = useState('');
@@ -221,7 +225,50 @@ export default function Medicines() {
         }
       />
 
-      {/* 2. Medical Care Controls Bar: Explain Simply + Universal Language Selector */}
+      {/* Tab Switcher */}
+      <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+        <button
+          type="button"
+          onClick={() => setActiveTab('database')}
+          className={`px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all cursor-pointer ${
+            activeTab === 'database'
+              ? 'bg-teal-600 text-white shadow-sm ring-2 ring-teal-500/20'
+              : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+          }`}
+        >
+          <Database className="w-4 h-4" />
+          <span>Search Indian Medicine Directory</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+            activeTab === 'database' ? 'bg-teal-700 text-teal-100' : 'bg-slate-100 text-slate-600'
+          }`}>
+            251,320 Verified
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('regimen')}
+          className={`px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all cursor-pointer ${
+            activeTab === 'regimen'
+              ? 'bg-teal-600 text-white shadow-sm ring-2 ring-teal-500/20'
+              : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+          }`}
+        >
+          <Pill className="w-4 h-4" />
+          <span>My Daily Regimen & Adherence</span>
+          <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+            activeTab === 'regimen' ? 'bg-teal-700 text-teal-100' : 'bg-slate-100 text-slate-600'
+          }`}>
+            {takenCount}/{medicinesList.length} Taken
+          </span>
+        </button>
+      </div>
+
+      {activeTab === 'database' ? (
+        <MedicineDatabaseViewer />
+      ) : (
+        <>
+          {/* 2. Medical Care Controls Bar: Explain Simply + Universal Language Selector */}
       <div className="p-4 bg-white border border-slate-200 rounded-2xl shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs">
@@ -532,6 +579,8 @@ export default function Medicines() {
           </div>
         </div>
       </Card>
+      </>
+      )}
 
       {/* Interactive Reminder Modal */}
       <ReminderModal

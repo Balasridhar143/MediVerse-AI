@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { doctorService, appointmentService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -21,10 +22,12 @@ import {
 } from 'lucide-react';
 
 export default function FindDoctor() {
+  const [searchParams] = useSearchParams();
+  const initialSearch = searchParams.get('search') || '';
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(initialSearch);
   const [selectedDept, setSelectedDept] = useState('All');
   const [bookingDoctor, setBookingDoctor] = useState(null);
 

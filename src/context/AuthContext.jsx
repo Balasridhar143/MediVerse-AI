@@ -72,33 +72,6 @@ export const AuthProvider = ({ children }) => {
       }
       throw new Error('Invalid login response from authentication server.');
     } catch (err) {
-      // Graceful demo login fallback if backend service is unreachable over public internet
-      if (!err.response || err.code === 'ERR_NETWORK' || err.message?.includes('Network Error')) {
-        const demoAccounts = [
-          { id: 'usr_pat_001', name: 'Gokul Sankar', email: 'patient@example.com', role: 'patient' },
-          { id: 'usr_pat_002', name: 'Rahul Sharma', email: 'patient@test.com', role: 'patient' },
-          { id: 'usr_doc_001', name: 'Dr. Arun Kumar', email: 'doctor@example.com', role: 'doctor', hospital_id: 'hosp_1' },
-          { id: 'usr_adm_001', name: 'City Hospital Administrator', email: 'admin@example.com', role: 'hospital_admin', hospital_id: 'hosp_1' },
-          { id: 'usr_adm_002', name: 'Metro General Administrator', email: 'admin2@example.com', role: 'hospital_admin', hospital_id: 'hosp_2' },
-        ];
-        const match = demoAccounts.find(
-          (a) => a.email.toLowerCase() === email.trim().toLowerCase() && password === 'password123'
-        );
-        if (match) {
-          const authenticatedUser = {
-            ...match,
-            full_name: match.name,
-          };
-          setUser(authenticatedUser);
-          const demoToken = `demo_jwt_token_${Date.now()}`;
-          setToken(demoToken);
-          localStorage.setItem('pulsecare_user', JSON.stringify(authenticatedUser));
-          localStorage.setItem('pulsecare_token', demoToken);
-          localStorage.setItem('telehealth_user', JSON.stringify(authenticatedUser));
-          localStorage.setItem('telehealth_token', demoToken);
-          return authenticatedUser;
-        }
-      }
       const errMsg = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.';
       throw new Error(errMsg);
     }

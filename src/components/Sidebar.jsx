@@ -194,7 +194,7 @@ export default function Sidebar({ isOpen, onClose }) {
             </div>
             <div className="min-w-0">
               <span className="font-bold text-slate-900 text-sm tracking-tight block truncate">
-                PULSECARE
+                MEDIVERSE AI
               </span>
               <span className="text-[10px] text-teal-700 font-semibold tracking-wider uppercase block truncate">
                 {roleTitle}
