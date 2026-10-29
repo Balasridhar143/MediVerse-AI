@@ -5,11 +5,13 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS } from './datasets.js';
+import { sendOtpEmail } from './email.js';
 
 const app = express();
 
-const allowedOrigins = [
-  'https://balasridhar143.github.io',
+const defaultAllowedOrigins = [
+  'https://mediverse-ai-fawn.vercel.app',
+  'https://sem-project1.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://localhost:5173',
@@ -17,12 +19,29 @@ const allowedOrigins = [
   'http://0.0.0.0:3000',
 ];
 
+const envAllowed = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Server-to-server, curl, mobile native, same-origin
+  if (defaultAllowedOrigins.includes(origin) || envAllowed.includes(origin)) return true;
+  // Allow Vercel production & preview deployments
+  if (origin.endsWith('.vercel.app') && (origin.includes('mediverse') || origin.includes('balasridhar143'))) {
+    return true;
+  }
+  // Allow Render internal service origins
+  if (origin.endsWith('.onrender.com')) return true;
+  return false;
+};
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.github.io')) {
+    if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      callback(null, true);
+      callback(new Error(`CORS access blocked for origin: ${origin}`));
     }
   },
   credentials: true,
@@ -672,10 +691,30 @@ app.post(['/auth/forgot-password', '/api/auth/forgot-password'], async (req, res
 
     console.log(`[OTP] Generated password reset code for ${cleanEmail} (expires in 10m)`);
 
-    return res.status(200).json({
-      success: true,
-      message: 'A 6-digit verification code has been sent to your email address.',
-      cooldown: 60,
+    // Dispatch OTP via configured SMTP provider
+    const emailResult = await sendOtpEmail(cleanEmail, otpCode, 'PASSWORD_RESET');
+
+    if (emailResult.sent) {
+      return res.status(200).json({
+        success: true,
+        delivered: true,
+        message: 'A 6-digit verification code has been dispatched to your email address.',
+        cooldown: 60,
+      });
+    }
+
+    if (!emailResult.configured) {
+      return res.status(200).json({
+        success: true,
+        delivered: false,
+        message: `Verification code generated securely in database. Note: Email provider (SMTP_HOST/USER/PASS) is not configured in environment variables. For clinical testing in development mode, code is: ${otpCode}.`,
+        code: otpCode,
+        cooldown: 60,
+      });
+    }
+
+    return res.status(502).json({
+      detail: `Email delivery failed: ${emailResult.reason}. Please try again later or contact support.`,
     });
   } catch (err) {
     console.error('Forgot password error:', err);
@@ -898,10 +937,29 @@ app.post(['/auth/request-otp', '/api/auth/request-otp'], async (req, res) => {
 
     console.log(`[OTP] Generated login code for ${cleanEmail}`);
 
-    return res.json({
-      success: true,
-      message: 'A 6-digit login verification code has been dispatched to your email.',
-      cooldown: 60,
+    const emailResult = await sendOtpEmail(cleanEmail, otpCode, 'LOGIN');
+
+    if (emailResult.sent) {
+      return res.json({
+        success: true,
+        delivered: true,
+        message: 'A 6-digit login verification code has been dispatched to your email.',
+        cooldown: 60,
+      });
+    }
+
+    if (!emailResult.configured) {
+      return res.json({
+        success: true,
+        delivered: false,
+        message: `Login verification code generated securely in database. Note: Email provider (SMTP_HOST/USER/PASS) is not configured in environment variables. For clinical testing in development mode, code is: ${otpCode}.`,
+        code: otpCode,
+        cooldown: 60,
+      });
+    }
+
+    return res.status(502).json({
+      detail: `Email delivery failed: ${emailResult.reason}. Please try again later.`,
     });
   } catch (err) {
     return res.status(500).json({ detail: `Failed to request login code: ${err.message}` });

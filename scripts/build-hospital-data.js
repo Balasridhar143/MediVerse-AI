@@ -244,3 +244,4 @@ export const CLINICAL_HOSPITALS = ${JSON.stringify(allHospitals, null, 2)};
 
 fs.writeFileSync('api/datasets.js', fileData, 'utf8');
 console.log('Successfully generated api/datasets.js with', allHospitals.length, 'hospitals and verified statistics!');
+

@@ -199,7 +199,7 @@ export default function ForgotPassword() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="e.g. patient@example.com"
+                      placeholder="Enter your registered email"
                       className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg focus:outline-hidden focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white"
                     />
                   </div>
