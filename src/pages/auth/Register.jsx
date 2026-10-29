@@ -11,8 +11,14 @@ import {
   Building2,
   ArrowRight,
   ShieldCheck,
+  Server,
+  Settings,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import Button from '../../components/Button';
+import { getApiBaseUrl, setApiBaseUrl, authService } from '../../services/api';
 
 export default function Register() {
   const { register } = useAuth();
@@ -40,9 +46,41 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Production Backend Connection Config
+  const [showApiConfig, setShowApiConfig] = useState(false);
+  const [customApiUrl, setCustomApiUrl] = useState(() => {
+    const current = getApiBaseUrl();
+    return current === '/api' ? '' : current;
+  });
+  const [apiTesting, setApiTesting] = useState(false);
+  const [apiSuccessMsg, setApiSuccessMsg] = useState('');
+  const [apiTestError, setApiTestError] = useState('');
+
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleSaveApiUrl = async () => {
+    setApiTesting(true);
+    setApiSuccessMsg('');
+    setApiTestError('');
+    const target = customApiUrl.trim();
+    if (!target) {
+      setApiBaseUrl('');
+      setApiSuccessMsg('Reset to default relative API (/api).');
+      setApiTesting(false);
+      return;
+    }
+    const res = await authService.testBackendConnection(target);
+    if (res.success) {
+      setApiBaseUrl(target);
+      setApiSuccessMsg('Connected successfully to Mediverse Clinical API!');
+      setError('');
+    } else {
+      setApiTestError(`Unable to connect: ${res.error}. Please verify the backend URL and CORS configuration.`);
+    }
+    setApiTesting(false);
   };
 
   const handleSubmit = async (e) => {
@@ -75,7 +113,12 @@ export default function Register() {
         navigate('/hospital/dashboard');
       }
     } catch (err) {
-      setError(err.message || 'Registration failed. Please verify your details.');
+      const errMsg = err.response?.data?.detail || err.message || 'Registration failed. Please verify your details.';
+      setError(errMsg);
+      // Auto-expand API configuration panel if HTTP 405 occurs on static hosting
+      if (err.response?.status === 405 || errMsg.includes('405') || errMsg.includes('static')) {
+        setShowApiConfig(true);
+      }
     } finally {
       setLoading(false);
     }
@@ -101,7 +144,73 @@ export default function Register() {
         <div className="bg-white py-8 px-6 shadow-xs border border-slate-200 rounded-xl sm:px-10">
           {error && (
             <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">
-              {error}
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p>{error}</p>
+                  {(error.includes('405') || error.includes('static') || error.includes('backend') || error.includes('Method Not Allowed')) && !showApiConfig && (
+                    <button
+                      type="button"
+                      onClick={() => setShowApiConfig(true)}
+                      className="mt-2 inline-flex items-center gap-1 font-semibold text-teal-700 hover:text-teal-800 underline cursor-pointer"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      Configure Live Backend API URL
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Backend API Configuration Panel */}
+          {showApiConfig && (
+            <div className="mb-5 p-3.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-700">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold flex items-center gap-1 text-slate-800">
+                  <Server className="w-3.5 h-3.5 text-teal-600" />
+                  Cloud Backend Endpoint (Render / Railway / VPS)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowApiConfig(false)}
+                  className="text-slate-400 hover:text-slate-600 text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                GitHub Pages hosts static assets only. To create accounts and authenticate in production, connect your live Mediverse backend service.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="https://your-mediverse-backend.onrender.com/api"
+                  value={customApiUrl}
+                  onChange={(e) => setCustomApiUrl(e.target.value)}
+                  className="flex-1 px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md focus:ring-1 focus:ring-teal-500 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveApiUrl}
+                  disabled={apiTesting}
+                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-md font-medium text-xs flex items-center gap-1 cursor-pointer"
+                >
+                  {apiTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Connect'}
+                </button>
+              </div>
+              {apiSuccessMsg && (
+                <div className="mt-2 text-emerald-700 flex items-center gap-1 font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {apiSuccessMsg}
+                </div>
+              )}
+              {apiTestError && (
+                <div className="mt-2 text-rose-600 flex items-start gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>{apiTestError}</span>
+                </div>
+              )}
             </div>
           )}
 

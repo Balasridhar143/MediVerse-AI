@@ -37,6 +37,7 @@ jobs:
       - name: Build Production Static Bundle
         env:
           GITHUB_PAGES: "true"
+          VITE_API_URL: ${{ vars.VITE_API_URL || secrets.VITE_API_URL || '' }}
         run: npm run build
 
       - name: Setup GitHub Pages
@@ -50,3 +51,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+

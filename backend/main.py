@@ -41,14 +41,13 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://0.0.0.0:3000",
-    "https://mediverse-ai-fawn.vercel.app",
-    "https://mediverse-ai-balasridhar143s-projects.vercel.app",
+    "https://balasridhar143.github.io",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://.*\.github\.io",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

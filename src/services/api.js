@@ -4,9 +4,33 @@ import { mockPatientAllergies, runPrescriptionSafetyCheck } from '../data/medici
 import { verifiedMedicineDatabase } from '../data/verifiedMedicineDatabase';
 
 // Base API configuration for Mediverse API:
-// Respects VITE_API_URL / VITE_API_BASE_URL if configured, otherwise falls back to local /api proxy
-const getApiBaseUrl = () => {
-  return import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || '/api';
+// 1. Checks localStorage for user/admin configured backend URL
+// 2. Checks build-time VITE_API_URL / VITE_API_BASE_URL
+// 3. Falls back to '/api' for local Vite proxy
+export const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const custom = localStorage.getItem('mediverse_api_url') || window.MEDIVERSE_API_URL;
+    if (custom && custom.trim()) {
+      return custom.trim().replace(/\/+$/, '');
+    }
+  }
+  if (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL) {
+    return (import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL).replace(/\/+$/, '');
+  }
+  return '/api';
+};
+
+export const setApiBaseUrl = (url) => {
+  if (typeof window !== 'undefined') {
+    if (url && url.trim()) {
+      const clean = url.trim().replace(/\/+$/, '');
+      localStorage.setItem('mediverse_api_url', clean);
+      api.defaults.baseURL = clean;
+    } else {
+      localStorage.removeItem('mediverse_api_url');
+      api.defaults.baseURL = getApiBaseUrl();
+    }
+  }
 };
 
 const api = axios.create({
@@ -17,9 +41,41 @@ const api = axios.create({
   timeout: 15000,
 });
 
-// Request interceptor: attaches Bearer token if user is logged in
+// Request interceptor: dynamically updates baseURL and intercepts mutating calls to static hosts
 api.interceptors.request.use(
   (config) => {
+    const activeBase = getApiBaseUrl();
+    if (activeBase && activeBase !== '/api') {
+      config.baseURL = activeBase;
+    }
+
+    // Intercept mutating requests (POST, PUT, PATCH, DELETE) aimed at static GitHub Pages
+    if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
+      const currentTarget = config.baseURL || activeBase;
+      const isStaticTarget = !currentTarget || currentTarget === '/api' || currentTarget.includes('github.io');
+      const isMutating = config.method && ['post', 'put', 'patch', 'delete'].includes(config.method.toLowerCase());
+
+      if (isStaticTarget && isMutating) {
+        const customUrl = localStorage.getItem('mediverse_api_url');
+        if (!customUrl) {
+          const err = new Error(
+            'GitHub Pages is a static file host and does not execute backend APIs (HTTP 405 Method Not Allowed). A live backend server URL (e.g. Render, Railway, or VPS) must be connected to register accounts and authenticate.'
+          );
+          err.isStaticHostError = true;
+          err.status = 405;
+          err.response = {
+            status: 405,
+            statusText: 'Method Not Allowed',
+            data: {
+              detail:
+                'GitHub Pages is a static file host and cannot execute database operations (HTTP 405). Please connect a deployed backend API URL in Settings or run the backend locally.'
+            }
+          };
+          return Promise.reject(err);
+        }
+      }
+    }
+
     const token = localStorage.getItem('pulsecare_token') || localStorage.getItem('telehealth_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -29,10 +85,23 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: handles unauthorized 401
+// Response interceptor: handles 405 from static hosts and unauthorized 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response && error.response.status === 405) {
+      const isGitHubPages = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
+      if (isGitHubPages) {
+        const msg =
+          'Static Hosting Notice (HTTP 405): GitHub Pages is serving static frontend assets and rejected the HTTP POST method. A live backend server (FastAPI/Express on Render, Railway, or VPS) is required to process accounts in the database.';
+        error.message = msg;
+        if (error.response.data && typeof error.response.data === 'object') {
+          error.response.data.detail = msg;
+        } else {
+          error.response.data = { detail: msg };
+        }
+      }
+    }
     if (error.response && error.response.status === 401) {
       // Clear expired credentials
       localStorage.removeItem('pulsecare_token');
@@ -48,6 +117,23 @@ api.interceptors.response.use(
  * Authentication Service
  */
 export const authService = {
+  async testBackendConnection(targetUrl) {
+    const url = targetUrl ? targetUrl.trim().replace(/\/+$/, '') : getApiBaseUrl();
+    try {
+      const endpoint = url.endsWith('/api') ? `${url}/health` : `${url}/api/health`;
+      const res = await axios.get(endpoint, { timeout: 6000 });
+      return { success: true, data: res.data };
+    } catch (e) {
+      try {
+        const rootHealth = `${url}/health`;
+        const res = await axios.get(rootHealth, { timeout: 6000 });
+        return { success: true, data: res.data };
+      } catch (e2) {
+        return { success: false, error: e2.message || e.message };
+      }
+    }
+  },
+
   async login(email, password) {
     const response = await api.post('/auth/login', { email, password });
     return response.data;
