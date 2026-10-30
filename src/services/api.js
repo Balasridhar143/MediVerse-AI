@@ -512,36 +512,34 @@ export const ragService = {
  * Prescription & Medicine Safety Service
  */
 export const prescriptionService = {
-  async getPrescriptions(patientId) {
-    try {
-      const res = await api.get('/prescriptions', { params: { patient_id: patientId } });
-      return res.data;
-    } catch (err) {
-      return mockPrescriptions;
-    }
+  async getPrescriptions(patientId = '') {
+    const params = patientId ? { patient_id: patientId } : {};
+    const res = await api.get('/prescriptions', { params });
+    return res.data;
   },
 
   async getPrescriptionById(id) {
-    try {
-      const res = await api.get(`/prescriptions/${id}`);
-      return res.data;
-    } catch (err) {
-      return mockPrescriptions.find((p) => p.id === id) || null;
-    }
+    const res = await api.get(`/prescriptions/${id}`);
+    return res.data;
   },
 
   async createPrescription(prescriptionData) {
-    try {
-      const res = await api.post('/prescriptions', prescriptionData);
-      return res.data;
-    } catch (err) {
-      return {
-        ...prescriptionData,
-        id: `rx_${Date.now()}`,
-        status: 'Active',
-        date: new Date().toISOString().split('T')[0],
-      };
-    }
+    const res = await api.post('/prescriptions', prescriptionData);
+    return res.data;
+  },
+
+  async searchMedicines({ q = '', category = '', dosage_form = '', page = 1, limit = 20 } = {}) {
+    const res = await api.get('/prescriptions/medicines/search', {
+      params: { q, category, dosage_form, page, limit }
+    });
+    return res.data;
+  },
+
+  async getEligiblePatients({ q = '', page = 1, limit = 30 } = {}) {
+    const res = await api.get('/prescriptions/patients', {
+      params: { q, page, limit }
+    });
+    return res.data;
   },
 
   async checkSafety(payload) {

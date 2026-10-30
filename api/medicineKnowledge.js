@@ -452,3 +452,4 @@ export function enrichMedicineKnowledge(rawMed) {
     disclaimer: MEDICAL_DISCLAIMER
   };
 }
+

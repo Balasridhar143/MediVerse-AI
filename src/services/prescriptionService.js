@@ -1,59 +1,55 @@
 import api from './api';
-import { mockPrescriptions } from '../data/mockData';
 import { runPrescriptionSafetyCheck, mockPatientAllergies } from '../data/medicineSafetyData';
 
 /**
  * prescriptionService
- * Backend-ready API service structure for:
+ * Real PostgreSQL Database & Clinical Dataset API service:
  * - GET /api/prescriptions
  * - GET /api/prescriptions/{id}
  * - POST /api/prescriptions
- * - GET /api/medicines/{id}/safety
+ * - GET /api/prescriptions/medicines/search
+ * - GET /api/prescriptions/patients
  * - GET /api/patients/{id}/allergies
  * - POST /api/prescriptions/safety-check
- * 
- * Falls back gracefully to structured mock data until Python FastAPI backend is booted.
  */
 export const prescriptionService = {
   // GET /api/prescriptions
-  async getPrescriptions(patientId) {
-    try {
-      const response = await api.get('/prescriptions', { params: { patient_id: patientId } });
-      return response.data;
-    } catch (err) {
-      // Backend not yet connected: return verified mock data
-      return mockPrescriptions;
-    }
+  async getPrescriptions(patientId = '') {
+    const params = patientId ? { patient_id: patientId } : {};
+    const response = await api.get('/prescriptions', { params });
+    return response.data;
   },
 
   // GET /api/prescriptions/{id}
   async getPrescriptionById(id) {
-    try {
-      const response = await api.get(`/prescriptions/${id}`);
-      return response.data;
-    } catch (err) {
-      const rx = mockPrescriptions.find((p) => p.id === id);
-      return rx || null;
-    }
+    const response = await api.get(`/prescriptions/${id}`);
+    return response.data;
   },
 
   // POST /api/prescriptions
   async createPrescription(prescriptionData) {
-    try {
-      const response = await api.post('/prescriptions', prescriptionData);
-      return response.data;
-    } catch (err) {
-      return {
-        id: `rx_${Date.now()}`,
-        ...prescriptionData,
-        date: new Date().toISOString().split('T')[0],
-        status: 'Active',
-      };
-    }
+    const response = await api.post('/prescriptions', prescriptionData);
+    return response.data;
+  },
+
+  // GET /api/prescriptions/medicines/search
+  async searchMedicines({ q = '', category = '', dosage_form = '', page = 1, limit = 20 } = {}) {
+    const response = await api.get('/prescriptions/medicines/search', {
+      params: { q, category, dosage_form, page, limit }
+    });
+    return response.data;
+  },
+
+  // GET /api/prescriptions/patients
+  async getEligiblePatients({ q = '', page = 1, limit = 30 } = {}) {
+    const response = await api.get('/prescriptions/patients', {
+      params: { q, page, limit }
+    });
+    return response.data;
   },
 
   // GET /api/patients/{id}/allergies
-  async getPatientAllergies(patientId = 'PID-2026-089') {
+  async getPatientAllergies(patientId = '') {
     try {
       const response = await api.get(`/patients/${patientId}/allergies`);
       return response.data;
@@ -68,7 +64,6 @@ export const prescriptionService = {
       const response = await api.post('/prescriptions/safety-check', { medicines, patient_id: patientId });
       return response.data;
     } catch (err) {
-      // Client-side execution of verified clinical rules engine
       return runPrescriptionSafetyCheck({ medicines, patientId });
     }
   },
