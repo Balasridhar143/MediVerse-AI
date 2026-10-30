@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { notificationService, searchService } from '../services/api';
+import { notificationService, searchService, doctorService } from '../services/api';
 import {
   Menu,
   Bell,
@@ -35,11 +35,43 @@ export default function Navbar({ onToggleSidebar }) {
   const [showSearchPopover, setShowSearchPopover] = useState(false);
   const searchContainerRef = useRef(null);
 
+  // Doctor Hospital Affiliation State
+  const [affiliations, setAffiliations] = useState([]);
+  const [activeHospitalName, setActiveHospitalName] = useState('');
+  const [showHospitalMenu, setShowHospitalMenu] = useState(false);
+
+  useEffect(() => {
+    if (role === 'doctor') {
+      doctorService.getHospitalAffiliations()
+        .then((data) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setAffiliations(data);
+            const savedId = localStorage.getItem('mediverse_active_hospital_id');
+            const match = data.find((a) => a.hospitalId === savedId) || data[0];
+            setActiveHospitalName(match.hospitalName);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [role]);
+
+  const handleSwitchHospital = async (hospitalId, hospitalName) => {
+    try {
+      await doctorService.switchHospitalContext(hospitalId);
+      localStorage.setItem('mediverse_active_hospital_id', hospitalId);
+      setActiveHospitalName(hospitalName);
+      setShowHospitalMenu(false);
+    } catch (e) {
+      console.warn('Switch hospital failed:', e);
+    }
+  };
+
   // Close menus on path change
   useEffect(() => {
     setShowUserMenu(false);
     setShowNotifs(false);
     setShowSearchPopover(false);
+    setShowHospitalMenu(false);
   }, [location.pathname]);
 
   // Handle outside click for search popover
@@ -399,6 +431,68 @@ export default function Navbar({ onToggleSidebar }) {
             <Siren className="w-3.5 h-3.5 text-rose-600" />
             <span className="hidden sm:inline">Emergency</span>
           </Link>
+        )}
+
+        {/* Doctor Hospital Affiliation Switcher */}
+        {role === 'doctor' && affiliations.length > 0 && (
+          <div className="relative hidden sm:block">
+            <button
+              onClick={() => {
+                setShowHospitalMenu(!showHospitalMenu);
+                setShowUserMenu(false);
+                setShowNotifs(false);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-teal-200 bg-teal-50/80 hover:bg-teal-100 text-teal-900 text-xs font-semibold cursor-pointer transition-colors shadow-2xs"
+              title="Current Hospital Scope"
+            >
+              <Building2 className="w-3.5 h-3.5 text-teal-700" />
+              <span className="max-w-[130px] truncate">{activeHospitalName || user?.hospital_name || affiliations[0]?.hospitalName}</span>
+              {affiliations.length > 1 && <ChevronDown className="w-3 h-3 text-teal-600" />}
+            </button>
+
+            {showHospitalMenu && (
+              <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-xl z-50 text-xs overflow-hidden">
+                <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                  <span className="font-bold text-slate-800 text-[11px]">Affiliated Hospitals</span>
+                  <span className="text-[10px] bg-teal-100 text-teal-800 font-bold px-1.5 py-0.5 rounded">
+                    {affiliations.length} Total
+                  </span>
+                </div>
+                <div className="py-1 divide-y divide-slate-100">
+                  {affiliations.map((aff) => {
+                    const isCurrent = (activeHospitalName && activeHospitalName === aff.hospitalName) || (!activeHospitalName && aff.isPrimary);
+                    return (
+                      <button
+                        key={aff.affiliationId || aff.hospitalId}
+                        onClick={() => handleSwitchHospital(aff.hospitalId, aff.hospitalName)}
+                        className={`w-full text-left px-3.5 py-2 hover:bg-teal-50/70 transition-colors flex items-center justify-between cursor-pointer ${
+                          isCurrent ? 'bg-teal-50/40' : ''
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className={`font-semibold text-xs truncate ${isCurrent ? 'text-teal-950 font-bold' : 'text-slate-800'}`}>
+                            {aff.hospitalName}
+                          </p>
+                          <p className="text-[10px] text-slate-500 truncate">
+                            {aff.departmentName || 'Specialist'} • {aff.employmentStatus}
+                          </p>
+                        </div>
+                        {aff.isPrimary ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold shrink-0">
+                            Primary
+                          </span>
+                        ) : (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-semibold shrink-0">
+                            Visiting
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Notifications Dropdown */}

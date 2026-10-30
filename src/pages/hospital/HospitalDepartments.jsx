@@ -71,22 +71,57 @@ export default function HospitalDepartments() {
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-xs text-slate-600">
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500 flex items-center gap-1">
-                      <Stethoscope className="w-3.5 h-3.5 text-teal-600" /> Clinicians Assigned:
+                      <Stethoscope className="w-3.5 h-3.5 text-teal-600" /> Registered Doctors:
                     </span>
-                    <strong className="text-slate-900">{dept.doctorsCount || 0} Specialists</strong>
+                    <strong className="text-slate-900">
+                      {dept.registeredDoctors || 0} Clinicians
+                      {dept.activeDoctors > 0 && (
+                        <span className="ml-1 text-[11px] text-emerald-700 font-normal">
+                          ({dept.activeDoctors} On Duty)
+                        </span>
+                      )}
+                    </strong>
                   </div>
+
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-slate-500">Verified Specialists:</span>
+                    <span className={`font-semibold ${dept.verifiedDoctors > 0 ? 'text-teal-700' : 'text-slate-400'}`}>
+                      {dept.verifiedDoctors || 0} Verified
+                    </span>
+                  </div>
+
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500 flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-teal-600" /> Consultations Today:
+                      <Users className="w-3.5 h-3.5 text-teal-600" /> Registered Patients:
                     </span>
-                    <strong className="text-teal-700">{dept.appointmentsToday || 0} Bookings</strong>
+                    <strong className="text-slate-800">{dept.registeredPatients || 0} Patients</strong>
                   </div>
+
                   <div className="flex justify-between items-center">
                     <span className="text-slate-500 flex items-center gap-1">
-                      <Bed className="w-3.5 h-3.5 text-teal-600" /> Ward Bed Allocation:
+                      <Calendar className="w-3.5 h-3.5 text-teal-600" /> Total Consultations:
                     </span>
-                    <strong className="text-slate-800">{dept.bedCount || 20} Beds</strong>
+                    <strong className="text-teal-700">{dept.totalAppointments || 0} Bookings</strong>
                   </div>
+
+                  <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-200/60 text-[11px]">
+                    <div className="bg-white p-1.5 rounded border border-slate-200 text-center">
+                      <span className="text-slate-400 block text-[10px]">Completed</span>
+                      <strong className="text-emerald-700">{dept.completedAppointments || 0}</strong>
+                    </div>
+                    <div className="bg-white p-1.5 rounded border border-slate-200 text-center">
+                      <span className="text-slate-400 block text-[10px]">Pending</span>
+                      <strong className="text-amber-700">{dept.pendingAppointments || 0}</strong>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-1 border-t border-slate-200/60">
+                    <span className="text-slate-500 flex items-center gap-1">
+                      <Bed className="w-3.5 h-3.5 text-teal-600" /> Ward Capacity:
+                    </span>
+                    <strong className="text-slate-800">{dept.bedCount || 0} Beds</strong>
+                  </div>
+
                   <div className="flex justify-between items-center pt-1 border-t border-slate-200/60">
                     <span className="text-slate-500">Department Head:</span>
                     <span className="text-slate-800 font-semibold truncate max-w-[150px]">{dept.headDoctor || 'Attending Head'}</span>

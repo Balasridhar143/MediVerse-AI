@@ -604,6 +604,21 @@ export const doctorService = {
     const res = await api.get('/doctor/patients');
     return res.data;
   },
+
+  async getHospitalAffiliations() {
+    const res = await api.get('/doctor/hospital-affiliations');
+    return res.data;
+  },
+
+  async switchHospitalContext(hospitalId) {
+    const res = await api.post('/doctor/switch-hospital-context', { hospitalId });
+    return res.data;
+  },
+
+  async getPatientClinicalDossier(patientId) {
+    const res = await api.get(`/doctor/patients/${patientId}/clinical-dossier`);
+    return res.data;
+  },
 };
 
 /**
@@ -707,6 +722,11 @@ export const hospitalDataService = {
 
   async getDoctorSensitive(id, payload = {}) {
     const res = await api.post(`/hospital/doctors/${id}/sensitive`, payload);
+    return res.data;
+  },
+
+  async getDoctorPatientClinicalDossier(patientId) {
+    const res = await api.get(`/doctor/patients/${patientId}/clinical-dossier`);
     return res.data;
   },
 };

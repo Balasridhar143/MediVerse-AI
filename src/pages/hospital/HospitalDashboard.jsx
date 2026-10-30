@@ -91,9 +91,13 @@ export default function HospitalDashboard() {
               className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 text-xs hover:border-teal-300 transition-colors"
             >
               <h4 className="font-bold text-slate-900 truncate" title={dept.name}>{dept.name}</h4>
-              <p className="text-slate-500 text-[11px]">{dept.doctorsCount || 0} Clinicians</p>
+              <p className="text-slate-500 text-[11px]">
+                {dept.registeredDoctors ?? dept.doctorsCount ?? 0} Clinicians
+                {dept.activeDoctors > 0 ? ` (${dept.activeDoctors} On Duty)` : ''}
+              </p>
               <div className="pt-1 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-teal-700">{dept.appointmentsToday || 0} Bookings</span>
+                <span className="font-semibold text-teal-700">{dept.totalAppointments || dept.appointmentsToday || 0} Bookings</span>
+                <span className="text-slate-400 font-medium">{dept.registeredPatients || 0} Patients</span>
               </div>
             </div>
           ))}

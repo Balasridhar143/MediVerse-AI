@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { hospitalDataService } from '../../services/api';
-import { mockDepartments } from '../../data/mockData';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -12,13 +11,17 @@ export default function HospitalAppointments() {
   const [selectedDept, setSelectedDept] = useState('All');
   const [selectedStatus, setSelectedStatus] = useState('All');
   const [appointments, setAppointments] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    hospitalDataService.getAppointments()
-      .then((data) => setAppointments(data || []))
-      .catch((err) => console.error('Failed to fetch hospital appointments:', err))
-      .finally(() => setLoading(false));
+    Promise.all([
+      hospitalDataService.getAppointments().catch(() => []),
+      hospitalDataService.getDepartments().catch(() => []),
+    ]).then(([apts, depts]) => {
+      setAppointments(apts || []);
+      if (Array.isArray(depts)) setDepartments(depts);
+    }).finally(() => setLoading(false));
   }, []);
 
   const filteredAppointments = appointments.filter((apt) => {
@@ -67,8 +70,8 @@ export default function HospitalAppointments() {
             className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white text-xs"
           >
             <option value="All">All Departments</option>
-            {mockDepartments.map((d) => (
-              <option key={d.name} value={d.name}>
+            {departments.map((d) => (
+              <option key={d.id || d.name} value={d.name}>
                 {d.name}
               </option>
             ))}

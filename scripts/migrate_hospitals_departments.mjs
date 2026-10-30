@@ -252,3 +252,4 @@ runMigrationWithRetry()
     console.error('Fatal migration failure:', e);
     process.exit(1);
   });
+

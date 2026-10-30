@@ -192,6 +192,33 @@ async function ensureTables(sql) {
     `;
 
     await sql`
+      CREATE TABLE IF NOT EXISTS doctor_hospital_affiliations (
+        id VARCHAR(64) PRIMARY KEY,
+        doctor_id VARCHAR(64) NOT NULL REFERENCES doctors(id) ON DELETE CASCADE,
+        hospital_id VARCHAR(64) NOT NULL REFERENCES hospitals(id) ON DELETE CASCADE,
+        department_id VARCHAR(64) REFERENCES departments(id) ON DELETE SET NULL,
+        department_name VARCHAR(128),
+        employment_status VARCHAR(64) DEFAULT 'ACTIVE',
+        is_primary BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        UNIQUE(doctor_id, hospital_id)
+      );
+    `;
+    await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS department_id VARCHAR(64);`;
+    await sql`ALTER TABLE doctors ADD COLUMN IF NOT EXISTS employment_status VARCHAR(64) DEFAULT 'ACTIVE';`;
+    await sql`ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS admin_user_id VARCHAR(64);`;
+    await sql`ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS admin_name VARCHAR(128);`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS hospital_id VARCHAR(64);`;
+    try {
+      await sql`
+        UPDATE appointments apt
+        SET hospital_id = h.id
+        FROM hospitals h
+        WHERE apt.hospital_name = h.name AND (apt.hospital_id IS NULL OR apt.hospital_id = '');
+      `;
+    } catch (e) {}
+
+    await sql`
       CREATE TABLE IF NOT EXISTS patient_registrations (
         id VARCHAR(64) PRIMARY KEY,
         user_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
@@ -492,6 +519,24 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
+// Optional token middleware: parses token if present, does not reject if missing
+const optionalAuthToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) {
+    return next();
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (!err && decoded) {
+      if (!decoded.id && decoded.sub) decoded.id = decoded.sub;
+      if (!decoded.sub && decoded.id) decoded.sub = decoded.id;
+      req.user = decoded;
+    }
+    next();
+  });
+};
+
 // ==========================================
 // 1. HEALTH CHECK
 // ==========================================
@@ -760,8 +805,13 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
       const docs = await sql`SELECT id, specialization, license_number, hospital_name FROM doctors WHERE user_id = ${user.id} LIMIT 1;`;
       if (docs.length > 0) profileData = docs[0];
     } else if (user.role === 'hospital_admin') {
-      const adms = await sql`SELECT id, hospital_name, facility_id FROM hospital_admins WHERE user_id = ${user.id} LIMIT 1;`;
-      if (adms.length > 0) profileData = adms[0];
+      const hospAdms = await sql`SELECT id, name as hospital_name, id as facility_id FROM hospitals WHERE admin_user_id = ${user.id} LIMIT 1;`;
+      if (hospAdms.length > 0) {
+        profileData = hospAdms[0];
+      } else {
+        const adms = await sql`SELECT id, hospital_name, facility_id FROM hospital_admins WHERE user_id = ${user.id} LIMIT 1;`;
+        if (adms.length > 0) profileData = adms[0];
+      }
     }
 
     const tokenPayload = {
@@ -770,6 +820,9 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
       email: user.email,
       role: user.role,
       full_name: user.full_name,
+      hospital_id: profileData.facility_id || user.hospital_id,
+      facility_id: profileData.facility_id,
+      hospital_name: profileData.hospital_name,
     };
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '7d' });
 
@@ -784,7 +837,9 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
         name: user.full_name,
         email: user.email,
         role: user.role,
-        hospital_id: user.hospital_id,
+        hospital_id: profileData.facility_id || user.hospital_id,
+        facility_id: profileData.facility_id,
+        hospital_name: profileData.hospital_name,
       },
     });
   } catch (err) {
@@ -831,8 +886,13 @@ app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
       const docs = await sql`SELECT id, specialization, license_number, hospital_name FROM doctors WHERE user_id = ${user.id} LIMIT 1;`;
       if (docs.length > 0) profileData = docs[0];
     } else if (user.role === 'hospital_admin') {
-      const adms = await sql`SELECT id, hospital_name, facility_id FROM hospital_admins WHERE user_id = ${user.id} LIMIT 1;`;
-      if (adms.length > 0) profileData = adms[0];
+      const hospAdms = await sql`SELECT id, name as hospital_name, id as facility_id FROM hospitals WHERE admin_user_id = ${user.id} LIMIT 1;`;
+      if (hospAdms.length > 0) {
+        profileData = hospAdms[0];
+      } else {
+        const adms = await sql`SELECT id, hospital_name, facility_id FROM hospital_admins WHERE user_id = ${user.id} LIMIT 1;`;
+        if (adms.length > 0) profileData = adms[0];
+      }
     }
 
     return res.json({
@@ -843,7 +903,9 @@ app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
       name: user.full_name,
       email: user.email,
       role: user.role,
-      hospital_id: user.hospital_id,
+      hospital_id: profileData.facility_id || user.hospital_id,
+      facility_id: profileData.facility_id,
+      hospital_name: profileData.hospital_name,
       created_at: user.created_at,
     });
   } catch (err) {
@@ -2873,26 +2935,146 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
 });
 
 // ==========================================
-// 12. HOSPITAL ADMIN DATA & ROSTERS (PHASE 7)
+// 12. HOSPITAL ADMIN DATA & ROSTERS (PHASE 7 & AUDIT REPAIR)
 // ==========================================
-app.get(['/hospital/dashboard-data', '/api/hospital/dashboard-data'], async (req, res) => {
+
+// Rate Limiting for Admin Password Re-authentication (Max 5 failed attempts / 15 mins)
+const failedAdminAttempts = new Map();
+
+function checkAdminRateLimit(key) {
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000; // 15 minutes
+  const maxAttempts = 5;
+
+  let attempts = failedAdminAttempts.get(key) || [];
+  attempts = attempts.filter((ts) => now - ts < windowMs);
+  failedAdminAttempts.set(key, attempts);
+
+  return attempts.length < maxAttempts;
+}
+
+function recordAdminFailure(key) {
+  const attempts = failedAdminAttempts.get(key) || [];
+  attempts.push(Date.now());
+  failedAdminAttempts.set(key, attempts);
+}
+
+function clearAdminFailures(key) {
+  failedAdminAttempts.delete(key);
+}
+
+// Hospital Context Resolution Helper
+async function resolveHospitalContext(req, sql) {
+  let requestedHospitalId = req.query.hospital_id || req.query.hospitalId || req.headers['x-hospital-id'];
+  const user = req.user;
+
+  if (user && (user.role === 'hospital_admin' || user.role === 'admin')) {
+    const adminHospitals = await sql`
+      SELECT h.id, h.name
+      FROM hospitals h
+      WHERE h.admin_user_id = ${user.id}
+      UNION
+      SELECT ha.facility_id as id, ha.hospital_name as name
+      FROM hospital_admins ha
+      WHERE ha.user_id = ${user.id}
+    `;
+
+    if (adminHospitals.length > 0) {
+      if (requestedHospitalId && user.role !== 'admin') {
+        const hasAccess = adminHospitals.some((h) => h.id === requestedHospitalId);
+        if (!hasAccess) {
+          return { error: 'Access denied: You do not have administrative authorization for this hospital facility.', status: 403 };
+        }
+      } else if (!requestedHospitalId) {
+        requestedHospitalId = adminHospitals[0].id;
+      }
+    }
+  } else if (user && user.role === 'doctor') {
+    const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${user.id} OR id = ${user.id} LIMIT 1;`;
+    if (docRows.length > 0) {
+      const docId = docRows[0].id;
+      const affiliations = await sql`
+        SELECT dha.hospital_id
+        FROM doctor_hospital_affiliations dha
+        WHERE dha.doctor_id = ${docId}
+      `;
+      if (requestedHospitalId) {
+        const hasAffiliation = affiliations.some((a) => a.hospital_id === requestedHospitalId);
+        if (!hasAffiliation) {
+          return { error: 'Access denied: Physician is not affiliated with this hospital facility.', status: 403 };
+        }
+      } else if (affiliations.length > 0) {
+        requestedHospitalId = affiliations[0].hospital_id;
+      }
+    }
+  }
+
+  const finalHospitalId = requestedHospitalId || 'hosp_1';
+  return { hospitalId: finalHospitalId };
+}
+
+app.get(['/hospital/dashboard-data', '/api/hospital/dashboard-data'], optionalAuthToken, async (req, res) => {
   try {
     const sql = getDb();
     await ensureTables(sql);
 
-    const doctorsCount = await sql`SELECT COUNT(*)::int as count FROM doctors;`;
-    const appointmentsCount = await sql`SELECT COUNT(*)::int as count FROM appointments;`;
-    const registrationsCount = await sql`SELECT COUNT(*)::int as count FROM patient_registrations;`;
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const doctorsCount = await sql`
+      SELECT COUNT(DISTINCT d.id)::int as count 
+      FROM doctors d
+      LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id
+      WHERE d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId};
+    `;
+
+    const appointmentsCount = await sql`
+      SELECT COUNT(*)::int as count 
+      FROM appointments apt
+      JOIN hospitals h ON h.id = ${hospitalId}
+      WHERE apt.hospital_id = ${hospitalId} OR apt.hospital_name = h.name
+         OR EXISTS (
+           SELECT 1 FROM doctor_hospital_affiliations dha 
+           WHERE dha.doctor_id = apt.doctor_id AND dha.hospital_id = ${hospitalId}
+         )
+         OR EXISTS (
+           SELECT 1 FROM doctors d 
+           WHERE (d.id = apt.doctor_id OR d.user_id = apt.doctor_id) AND d.hospital_id = ${hospitalId}
+         );
+    `;
+
+    const registrationsCount = await sql`
+      SELECT COUNT(*)::int as count 
+      FROM patient_registrations 
+      WHERE hospital_id = ${hospitalId};
+    `;
 
     const recentAppointments = await sql`
-      SELECT id, patient_name as "patientName", doctor_name as "doctorName",
-             department, time_slot as time, type, status, appointment_date as date
-      FROM appointments
-      ORDER BY created_at DESC
+      SELECT apt.id, apt.patient_name as "patientName", apt.doctor_name as "doctorName",
+             apt.department, apt.time_slot as time, apt.type, apt.status, apt.appointment_date as date
+      FROM appointments apt
+      JOIN hospitals h ON h.id = ${hospitalId}
+      WHERE apt.hospital_id = ${hospitalId} OR apt.hospital_name = h.name
+         OR EXISTS (
+           SELECT 1 FROM doctor_hospital_affiliations dha 
+           WHERE dha.doctor_id = apt.doctor_id AND dha.hospital_id = ${hospitalId}
+         )
+         OR EXISTS (
+           SELECT 1 FROM doctors d 
+           WHERE (d.id = apt.doctor_id OR d.user_id = apt.doctor_id) AND d.hospital_id = ${hospitalId}
+         )
+      ORDER BY apt.appointment_date DESC, apt.created_at DESC
       LIMIT 10;
     `;
 
+    const hospitalRows = await sql`SELECT id, name FROM hospitals WHERE id = ${hospitalId} LIMIT 1;`;
+    const hospitalInfo = hospitalRows[0] || { id: hospitalId, name: 'Hospital Care Facility' };
+
     return res.json({
+      hospital_id: hospitalId,
+      hospital_name: hospitalInfo.name,
       doctors_count: doctorsCount[0]?.count || 0,
       appointments_count: appointmentsCount[0]?.count || 0,
       registrations_count: registrationsCount[0]?.count || 0,
@@ -2903,21 +3085,32 @@ app.get(['/hospital/dashboard-data', '/api/hospital/dashboard-data'], async (req
   }
 });
 
-app.get(['/hospital/doctors', '/api/hospital/doctors'], async (req, res) => {
+app.get(['/hospital/doctors', '/api/hospital/doctors'], optionalAuthToken, async (req, res) => {
   try {
     const sql = getDb();
     await ensureTables(sql);
 
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
     const doctors = await sql`
-      SELECT d.id, COALESCE(u.full_name, d.full_name) as name, d.specialization,
-             COALESCE(d.department, 'General Medicine') as department,
+      SELECT DISTINCT ON (d.id)
+             d.id, COALESCE(u.full_name, d.full_name) as name, d.specialization,
+             COALESCE(dha.department_name, d.department, 'General Medicine') as department,
              'OPD Room ' || (SUBSTRING(d.id FROM 5 FOR 3)) as room,
              COALESCE(d.consultation_types->>0, 'Video & In-Person') as "consultationType",
              'Mon - Fri (09:00 AM - 05:00 PM)' as availability,
-             CASE WHEN COALESCE(d.is_available, true) THEN 'On Duty' ELSE 'Off Duty' END as status
+             CASE WHEN COALESCE(d.is_available, true) THEN 'On Duty' ELSE 'Off Duty' END as status,
+             COALESCE(dha.employment_status, d.employment_status, 'ACTIVE') as "employmentStatus",
+             COALESCE(dha.is_primary, true) as "isPrimaryAffiliation",
+             d.is_verified as "isVerified"
       FROM doctors d
       JOIN users u ON d.user_id = u.id
-      ORDER BY d.created_at DESC;
+      LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.hospital_id = ${hospitalId}
+      WHERE d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId}
+      ORDER BY d.id, d.created_at DESC;
     `;
 
     return res.json(doctors);
@@ -2926,17 +3119,32 @@ app.get(['/hospital/doctors', '/api/hospital/doctors'], async (req, res) => {
   }
 });
 
-app.get(['/hospital/appointments', '/api/hospital/appointments'], async (req, res) => {
+app.get(['/hospital/appointments', '/api/hospital/appointments'], optionalAuthToken, async (req, res) => {
   try {
     const sql = getDb();
     await ensureTables(sql);
 
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
     const appointments = await sql`
-      SELECT id, patient_name as "patientName", doctor_name as "doctorName",
-             department, appointment_date as date, time_slot as time, type, status
-      FROM appointments
-      ORDER BY appointment_date DESC, created_at DESC
-      LIMIT 50;
+      SELECT apt.id, apt.patient_name as "patientName", apt.doctor_name as "doctorName",
+             apt.department, apt.appointment_date as date, apt.time_slot as time, apt.type, apt.status
+      FROM appointments apt
+      JOIN hospitals h ON h.id = ${hospitalId}
+      WHERE apt.hospital_id = ${hospitalId} OR apt.hospital_name = h.name
+         OR EXISTS (
+           SELECT 1 FROM doctor_hospital_affiliations dha 
+           WHERE dha.doctor_id = apt.doctor_id AND dha.hospital_id = ${hospitalId}
+         )
+         OR EXISTS (
+           SELECT 1 FROM doctors d 
+           WHERE (d.id = apt.doctor_id OR d.user_id = apt.doctor_id) AND d.hospital_id = ${hospitalId}
+         )
+      ORDER BY apt.appointment_date DESC, apt.created_at DESC
+      LIMIT 100;
     `;
 
     return res.json(appointments);
@@ -2945,20 +3153,30 @@ app.get(['/hospital/appointments', '/api/hospital/appointments'], async (req, re
   }
 });
 
-app.get(['/hospital/patients', '/api/hospital/patients'], async (req, res) => {
+app.get(['/hospital/patients', '/api/hospital/patients'], optionalAuthToken, async (req, res) => {
   try {
     const sql = getDb();
     await ensureTables(sql);
 
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
     const patients = await sql`
-      SELECT p.id as "patientId", p.full_name as "patientName",
+      SELECT DISTINCT ON (p.id)
+             p.id as "patientId", p.full_name as "patientName",
              COALESCE(p.age, 38) as age, COALESCE(p.gender, 'M') as gender,
              COALESCE(p.blood_group, 'B+') as "bloodGroup",
-             'Outpatient Care' as "primaryCondition",
-             'Attending Staff' as "assignedDoctor",
+             COALESCE(apt.department, pr.department, 'Outpatient Care') as "primaryCondition",
+             COALESCE(apt.doctor_name, 'Attending Staff') as "assignedDoctor",
              'Active Care' as status
       FROM patients p
-      ORDER BY p.created_at DESC
+      JOIN users u ON p.user_id = u.id
+      LEFT JOIN appointments apt ON (apt.patient_id = p.id OR apt.patient_id = p.user_id) AND (apt.hospital_id = ${hospitalId} OR apt.hospital_name = (SELECT name FROM hospitals WHERE id = ${hospitalId}))
+      LEFT JOIN patient_registrations pr ON (pr.patient_id = p.id OR pr.user_id = p.user_id) AND pr.hospital_id = ${hospitalId}
+      WHERE apt.id IS NOT NULL OR pr.id IS NOT NULL
+      ORDER BY p.id, p.created_at DESC
       LIMIT 50;
     `;
 
@@ -2968,13 +3186,16 @@ app.get(['/hospital/patients', '/api/hospital/patients'], async (req, res) => {
   }
 });
 
-// Dynamic Clinical Departments with Live Aggregated Stats
-app.get(['/hospital/departments', '/api/hospital/departments'], async (req, res) => {
+// Dynamic Clinical Departments with Live Aggregated Stats across all 8 metrics
+app.get(['/hospital/departments', '/api/hospital/departments'], optionalAuthToken, async (req, res) => {
   try {
     const sql = getDb();
     await ensureTables(sql);
 
-    const hospitalId = req.query.hospital_id || req.query.hospitalId;
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
 
     const departments = await sql`
       SELECT 
@@ -2986,14 +3207,22 @@ app.get(['/hospital/departments', '/api/hospital/departments'], async (req, res)
         d.status,
         d.hospital_id as "hospitalId",
         h.name as "hospitalName",
+        COUNT(DISTINCT doc.id)::int as "registeredDoctors",
         COUNT(DISTINCT doc.id)::int as "doctorsCount",
-        COUNT(DISTINCT apt.id)::int as "appointmentsToday",
-        COUNT(DISTINCT apt.patient_id)::int as "activePatients"
+        COUNT(DISTINCT CASE WHEN (doc.is_available = true AND COALESCE(dha.employment_status, doc.employment_status) != 'SUSPENDED') THEN doc.id END)::int as "activeDoctors",
+        COUNT(DISTINCT CASE WHEN doc.is_verified = true THEN doc.id END)::int as "verifiedDoctors",
+        COUNT(DISTINCT COALESCE(apt.patient_id, pr.patient_id))::int as "registeredPatients",
+        COUNT(DISTINCT apt.id)::int as "totalAppointments",
+        COUNT(DISTINCT CASE WHEN apt.status = 'COMPLETED' THEN apt.id END)::int as "completedAppointments",
+        COUNT(DISTINCT CASE WHEN apt.status IN ('PENDING', 'CONFIRMED', 'SCHEDULED') THEN apt.id END)::int as "pendingAppointments",
+        COUNT(DISTINCT CASE WHEN apt.appointment_date = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') THEN apt.id END)::int as "appointmentsToday"
       FROM departments d
       LEFT JOIN hospitals h ON d.hospital_id = h.id
-      LEFT JOIN doctors doc ON doc.department = d.name
-      LEFT JOIN appointments apt ON apt.department = d.name
-      ${hospitalId ? sql`WHERE d.hospital_id = ${hospitalId}` : sql``}
+      LEFT JOIN doctor_hospital_affiliations dha ON (dha.department_id = d.id OR dha.department_name = d.name) AND dha.hospital_id = d.hospital_id
+      LEFT JOIN doctors doc ON (doc.id = dha.doctor_id OR (doc.hospital_id = d.hospital_id AND (doc.department_id = d.id OR doc.department = d.name)))
+      LEFT JOIN appointments apt ON (apt.department = d.name AND (apt.hospital_name = h.name OR apt.hospital_id = h.id OR apt.doctor_id = doc.id))
+      LEFT JOIN patient_registrations pr ON (pr.hospital_id = d.hospital_id AND pr.department = d.name)
+      WHERE d.hospital_id = ${hospitalId}
       GROUP BY d.id, d.name, d.code, d.head_doctor_name, d.bed_count, d.status, d.hospital_id, h.name
       ORDER BY d.name ASC;
     `;
@@ -3005,7 +3234,7 @@ app.get(['/hospital/departments', '/api/hospital/departments'], async (req, res)
   }
 });
 
-// Administrator Password Re-authentication for Sensitive Access
+// Administrator Password Re-authentication with Brute-Force Rate Limiting (5 failed attempts / 15 mins)
 app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-password'], authenticateToken, async (req, res) => {
   try {
     const { password } = req.body;
@@ -3015,6 +3244,18 @@ app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-passwor
 
     const sql = getDb();
     await ensureTables(sql);
+
+    const rateKey = req.user.id || req.ip;
+    if (!checkAdminRateLimit(rateKey)) {
+      try {
+        const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+        await sql`
+          INSERT INTO audit_logs (id, user_id, user_role, action, resource, details, ip_address)
+          VALUES (${logId}, ${req.user.id}, ${req.user.role || 'hospital_admin'}, 'ADMIN_REAUTH_RATE_LIMITED', 'SECURITY_CHECK', ${JSON.stringify({ status: 'LOCKED', reason: 'EXCEEDED_FAILED_ATTEMPTS' })}::jsonb, ${req.ip || '127.0.0.1'});
+        `;
+      } catch (e) {}
+      return res.status(429).json({ detail: 'Too many failed verification attempts. Access temporarily locked for 15 minutes.' });
+    }
 
     const users = await sql`
       SELECT id, email, role, password_hash, full_name
@@ -3030,6 +3271,7 @@ app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-passwor
     const user = users[0];
     const isValid = await bcrypt.compare(password, user.password_hash);
     if (!isValid) {
+      recordAdminFailure(rateKey);
       try {
         const logId = 'log_' + crypto.randomBytes(6).toString('hex');
         await sql`
@@ -3040,6 +3282,8 @@ app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-passwor
 
       return res.status(403).json({ detail: 'Invalid administrator password.' });
     }
+
+    clearAdminFailures(rateKey);
 
     const reauthToken = jwt.sign(
       {
@@ -3071,6 +3315,210 @@ app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-passwor
   } catch (err) {
     console.error('Re-auth error:', err);
     return res.status(500).json({ detail: `Admin verification failed: ${err.message}` });
+  }
+});
+
+// Doctor Verified Hospital Affiliations Endpoint
+app.get(['/doctor/hospital-affiliations', '/api/doctor/hospital-affiliations'], authenticateToken, async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${req.user.id} OR id = ${req.user.id} LIMIT 1;`;
+    if (docRows.length === 0) {
+      return res.status(404).json({ detail: 'Doctor profile not found.' });
+    }
+    const docId = docRows[0].id;
+
+    const affiliations = await sql`
+      SELECT dha.id as "affiliationId", dha.hospital_id as "hospitalId", h.name as "hospitalName",
+             h.address as "hospitalAddress", dha.department_id as "departmentId",
+             dha.department_name as "departmentName", dha.employment_status as "employmentStatus",
+             dha.is_primary as "isPrimary"
+      FROM doctor_hospital_affiliations dha
+      JOIN hospitals h ON dha.hospital_id = h.id
+      WHERE dha.doctor_id = ${docId}
+      ORDER BY dha.is_primary DESC, h.name ASC;
+    `;
+
+    return res.json(affiliations);
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to fetch hospital affiliations: ${err.message}` });
+  }
+});
+
+// Doctor Switch Hospital Context Endpoint
+app.post(['/doctor/switch-hospital-context', '/api/doctor/switch-hospital-context'], authenticateToken, async (req, res) => {
+  try {
+    const { hospitalId } = req.body;
+    if (!hospitalId) {
+      return res.status(400).json({ detail: 'hospitalId is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${req.user.id} OR id = ${req.user.id} LIMIT 1;`;
+    if (docRows.length === 0) {
+      return res.status(404).json({ detail: 'Doctor profile not found.' });
+    }
+    const docId = docRows[0].id;
+
+    const aff = await sql`
+      SELECT dha.*, h.name as "hospitalName"
+      FROM doctor_hospital_affiliations dha
+      JOIN hospitals h ON dha.hospital_id = h.id
+      WHERE dha.doctor_id = ${docId} AND dha.hospital_id = ${hospitalId}
+      LIMIT 1;
+    `;
+
+    if (aff.length === 0) {
+      return res.status(403).json({ detail: 'Doctor is not affiliated with this hospital facility.' });
+    }
+
+    return res.json({
+      success: true,
+      activeHospital: {
+        id: aff[0].hospital_id,
+        name: aff[0].hospitalName,
+        department: aff[0].department_name,
+        employmentStatus: aff[0].employment_status,
+        isPrimary: aff[0].is_primary,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to switch hospital context: ${err.message}` });
+  }
+});
+
+// Doctor Patient Clinical Dossier Access (Audited, Enforces Relationship without requiring Admin Password)
+app.get(['/doctor/patients/:id/clinical-dossier', '/api/doctor/patients/:id/clinical-dossier'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const docRows = await sql`SELECT id, full_name FROM doctors WHERE user_id = ${req.user.id} OR id = ${req.user.id} LIMIT 1;`;
+    if (docRows.length === 0 && req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Only clinicians or administrators may access clinical dossiers.' });
+    }
+
+    const docId = docRows[0]?.id;
+
+    // Check relationship if doctor
+    if (req.user.role === 'doctor') {
+      const authApt = await sql`
+        SELECT id FROM appointments 
+        WHERE (doctor_id = ${docId} OR doctor_id = ${req.user.id}) 
+          AND (patient_id = ${id} OR patient_id = (SELECT user_id FROM patients WHERE id = ${id}))
+        LIMIT 1;
+      `;
+
+      const authRel = await sql`
+        SELECT id FROM doctor_patient_relationships
+        WHERE (doctor_id = ${docId} OR doctor_id = ${req.user.id})
+          AND (patient_id = ${id} OR patient_id = (SELECT user_id FROM patients WHERE id = ${id}))
+          AND status = 'ACTIVE'
+        LIMIT 1;
+      `;
+
+      const authRx = await sql`
+        SELECT id FROM prescriptions
+        WHERE (doctor_id = ${docId} OR doctor_id = ${req.user.id})
+          AND (patient_id = ${id} OR patient_id = (SELECT user_id FROM patients WHERE id = ${id}))
+        LIMIT 1;
+      `;
+
+      if (authApt.length === 0 && authRel.length === 0 && authRx.length === 0) {
+        try {
+          const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+          await sql`
+            INSERT INTO audit_logs (id, user_id, user_role, action, resource, resource_id, details, ip_address)
+            VALUES (${logId}, ${req.user.id}, 'doctor', 'UNAUTHORIZED_PATIENT_ACCESS_ATTEMPT', 'PATIENT_DOSSIER', ${id}, ${JSON.stringify({ reason: 'NO_ACTIVE_RELATIONSHIP' })}::jsonb, ${req.ip || '127.0.0.1'});
+          `;
+        } catch (e) {}
+
+        return res.status(403).json({ detail: 'Access denied: Physician does not have an active clinical relationship or appointment with this patient.' });
+      }
+    }
+
+    const patientRows = await sql`
+      SELECT p.*, u.email, u.phone as "accountPhone"
+      FROM patients p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = ${id} OR p.user_id = ${id}
+      LIMIT 1;
+    `;
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({ detail: 'Patient record not found.' });
+    }
+
+    const p = patientRows[0];
+
+    const allergies = await sql`
+      SELECT allergen, category, reaction, severity, date_identified, notes, verification_status
+      FROM patient_allergies
+      WHERE patient_id = ${p.user_id}
+      ORDER BY severity DESC, created_at DESC;
+    `;
+
+    const reports = await sql`
+      SELECT id, report_type, title, file_url, created_at, status, notes
+      FROM medical_reports
+      WHERE patient_id = ${p.id} OR user_id = ${p.user_id}
+      ORDER BY created_at DESC;
+    `;
+
+    const prescriptions = await sql`
+      SELECT id, doctor_name, diagnosis, medicines, instructions, status, created_at
+      FROM prescriptions
+      WHERE patient_id = ${p.id} OR patient_id = ${p.user_id}
+      ORDER BY created_at DESC;
+    `;
+
+    const appointments = await sql`
+      SELECT id, doctor_name, department, appointment_date, time_slot, type, status
+      FROM appointments
+      WHERE patient_id = ${p.id} OR patient_id = ${p.user_id}
+      ORDER BY appointment_date DESC, created_at DESC;
+    `;
+
+    try {
+      const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+      await sql`
+        INSERT INTO audit_logs (id, user_id, user_role, action, resource, resource_id, details, ip_address)
+        VALUES (${logId}, ${req.user.id}, ${req.user.role || 'doctor'}, 'DOCTOR_PATIENT_DOSSIER_ACCESS', 'PATIENT_DOSSIER', ${p.id}, ${JSON.stringify({ patient_id: p.id, status: 'SUCCESS' })}::jsonb, ${req.ip || '127.0.0.1'});
+      `;
+    } catch (e) {}
+
+    return res.json({
+      patient: {
+        id: p.id,
+        user_id: p.user_id,
+        full_name: p.full_name,
+        age: p.age,
+        gender: p.gender,
+        blood_group: p.blood_group,
+        phone_number: p.accountPhone,
+        email: p.email,
+        address: p.address,
+        emergency_contact_name: p.emergency_contact_name,
+        emergency_contact_phone: p.emergency_contact_phone,
+        allergy_status: p.allergy_status,
+        documented_allergies: allergies,
+        medical_history: p.medical_history,
+        chronic_conditions: p.chronic_conditions,
+        medical_reports: reports,
+        prescriptions: prescriptions,
+        appointments: appointments,
+      },
+      accessAudited: true,
+      auditTimestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error fetching clinical dossier:', err);
+    return res.status(500).json({ detail: `Failed to fetch clinical dossier: ${err.message}` });
   }
 });
 
