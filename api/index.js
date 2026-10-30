@@ -127,6 +127,11 @@ async function ensureTables(sql) {
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_patient_allergies_patient ON patient_allergies(patient_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_patient_allergies_allergen ON patient_allergies(allergen);`;
+    await sql`ALTER TABLE patient_allergies ADD COLUMN IF NOT EXISTS notes TEXT;`;
+    await sql`ALTER TABLE patient_allergies ADD COLUMN IF NOT EXISTS date_identified VARCHAR(64);`;
+    await sql`ALTER TABLE patient_allergies ADD COLUMN IF NOT EXISTS verification_status VARCHAR(64) DEFAULT 'CONFIRMED';`;
+    await sql`ALTER TABLE patient_allergies ADD COLUMN IF NOT EXISTS documented_by_id VARCHAR(64);`;
+    await sql`ALTER TABLE patient_allergies ADD COLUMN IF NOT EXISTS documented_by_name VARCHAR(128);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS doctors (
