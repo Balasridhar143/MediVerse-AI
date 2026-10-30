@@ -739,14 +739,21 @@ export const consultationService = {
     return res.data;
   },
 
-  async sendSignal(appointmentId, type, data) {
-    const res = await api.post(`/consultation/room/${appointmentId}/signal`, { type, data });
+  async sendSignal(appointmentId, type, data, sessionId = '') {
+    const payload = { type, data };
+    if (sessionId) payload.sessionId = sessionId;
+    const config = sessionId ? { headers: { 'x-session-id': sessionId } } : {};
+    const res = await api.post(`/consultation/room/${appointmentId}/signal`, payload, config);
     return res.data;
   },
 
-  async getSignals(appointmentId, sinceId = '') {
-    const params = sinceId ? { since_id: sinceId } : {};
-    const res = await api.get(`/consultation/room/${appointmentId}/signal`, { params });
+  async getSignals(appointmentId, sinceId = '', sessionId = '') {
+    const params = {};
+    if (sinceId) params.since_id = sinceId;
+    if (sessionId) params.sessionId = sessionId;
+    const config = { params };
+    if (sessionId) config.headers = { 'x-session-id': sessionId };
+    const res = await api.get(`/consultation/room/${appointmentId}/signal`, config);
     return res.data;
   },
 

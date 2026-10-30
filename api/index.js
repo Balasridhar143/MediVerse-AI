@@ -237,11 +237,21 @@ async function ensureTables(sql) {
         sender_role VARCHAR(32) NOT NULL,
         signal_type VARCHAR(64) NOT NULL,
         signal_data TEXT NOT NULL,
+        sender_session_id VARCHAR(64),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_signals_room_id ON consultation_signals(room_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_signals_created_at ON consultation_signals(created_at);`;
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='consultation_signals' AND column_name='sender_session_id') THEN
+          ALTER TABLE consultation_signals ADD COLUMN sender_session_id VARCHAR(64);
+        END IF;
+      END $$;
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_signals_session ON consultation_signals(room_id, sender_session_id);`;
 
     // 11. Extend medical_reports for RAG and PDF metadata
     await sql`
@@ -2840,7 +2850,21 @@ const STUN_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
 ];
+
+const getIceServers = () => {
+  const servers = [...STUN_SERVERS];
+  if (process.env.TURN_URLS) {
+    const urls = process.env.TURN_URLS.split(',').map((u) => u.trim());
+    const turnEntry = { urls };
+    if (process.env.TURN_USERNAME) turnEntry.username = process.env.TURN_USERNAME;
+    if (process.env.TURN_CREDENTIAL) turnEntry.credential = process.env.TURN_CREDENTIAL;
+    servers.push(turnEntry);
+  }
+  return servers;
+};
 
 app.get(['/consultation/room/:appointment_id', '/api/consultation/room/:appointment_id'], authenticateToken, async (req, res) => {
   try {
@@ -2894,7 +2918,7 @@ app.get(['/consultation/room/:appointment_id', '/api/consultation/room/:appointm
       callerRole: isPatient ? 'patient' : 'doctor',
       peerName: peerName,
       peerRole: peerRole,
-      iceServers: STUN_SERVERS,
+      iceServers: getIceServers(),
     });
   } catch (err) {
     return res.status(500).json({ detail: `Room access error: ${err.message}` });
@@ -2904,7 +2928,7 @@ app.get(['/consultation/room/:appointment_id', '/api/consultation/room/:appointm
 app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:appointment_id/signal'], authenticateToken, async (req, res) => {
   try {
     const { appointment_id } = req.params;
-    const { type, data, signal_type, signal_data } = req.body;
+    const { type, data, signal_type, signal_data, sessionId } = req.body;
     const sql = getDb();
     await ensureTables(sql);
 
@@ -2934,6 +2958,7 @@ app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:
       return res.status(400).json({ detail: 'Signal type is required.' });
     }
 
+    const clientSessionId = sessionId || req.headers['x-session-id'] || null;
     const sigStr = typeof sigData === 'object' ? JSON.stringify(sigData) : String(sigData || '');
     const sigId = `sig_${crypto.randomBytes(6).toString('hex')}`;
     const senderId = req.user.id || req.user.sub || 'usr_pat_001';
@@ -2941,8 +2966,8 @@ app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:
     const roomId = `room_${apt.id}`;
 
     await sql`
-      INSERT INTO consultation_signals (id, room_id, sender_id, sender_role, signal_type, signal_data, created_at)
-      VALUES (${sigId}, ${roomId}, ${senderId}, ${userRole}, ${sigType}, ${sigStr}, NOW());
+      INSERT INTO consultation_signals (id, room_id, sender_id, sender_role, signal_type, signal_data, sender_session_id, created_at)
+      VALUES (${sigId}, ${roomId}, ${senderId}, ${userRole}, ${sigType}, ${sigStr}, ${clientSessionId}, NOW());
     `;
 
     return res.json({ success: true, signal_id: sigId });
@@ -2954,6 +2979,7 @@ app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:
 app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:appointment_id/signal'], authenticateToken, async (req, res) => {
   try {
     const { appointment_id } = req.params;
+    const clientSessionId = req.query.sessionId || req.headers['x-session-id'] || null;
     const sql = getDb();
     await ensureTables(sql);
 
@@ -2968,16 +2994,31 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
     }
     const roomId = `room_${apt.id}`;
 
-    // Get signals sent by the OTHER participant in the last 15 minutes
-    const signals = await sql`
-      SELECT id, sender_id as "senderId", sender_role as "senderRole",
-             signal_type as type, signal_data as data, created_at as "createdAt"
-      FROM consultation_signals
-      WHERE room_id = ${roomId}
-        AND sender_id != ${req.user.id}
-        AND created_at >= NOW() - INTERVAL '15 minutes'
-      ORDER BY created_at ASC;
-    `;
+    // Get signals sent by the other participant or other session in the last 15 minutes
+    let signals;
+    if (clientSessionId) {
+      signals = await sql`
+        SELECT id, sender_id as "senderId", sender_role as "senderRole",
+               signal_type as type, signal_data as data, created_at as "createdAt",
+               sender_session_id as "senderSessionId"
+        FROM consultation_signals
+        WHERE room_id = ${roomId}
+          AND (sender_session_id IS NULL OR sender_session_id != ${clientSessionId})
+          AND created_at >= NOW() - INTERVAL '15 minutes'
+        ORDER BY created_at ASC;
+      `;
+    } else {
+      signals = await sql`
+        SELECT id, sender_id as "senderId", sender_role as "senderRole",
+               signal_type as type, signal_data as data, created_at as "createdAt",
+               sender_session_id as "senderSessionId"
+        FROM consultation_signals
+        WHERE room_id = ${roomId}
+          AND sender_id != ${req.user.id}
+          AND created_at >= NOW() - INTERVAL '15 minutes'
+        ORDER BY created_at ASC;
+      `;
+    }
 
     const formatted = signals.map((s) => {
       let parsed = s.data;
@@ -2988,6 +3029,7 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
         id: s.id,
         senderId: s.senderId,
         senderRole: s.senderRole,
+        senderSessionId: s.senderSessionId,
         type: s.type,
         data: parsed,
         createdAt: s.createdAt,
