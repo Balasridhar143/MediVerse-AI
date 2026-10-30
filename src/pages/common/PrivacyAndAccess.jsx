@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { mockAccessGrants } from '../../data/mockData';
+import api from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -20,10 +21,43 @@ import { Link } from 'react-router-dom';
 
 export default function PrivacyAndAccess() {
   const { user, role } = useAuth();
-  const [grants, setGrants] = useState(mockAccessGrants);
+  const [grants, setGrants] = useState([]);
   const [message, setMessage] = useState('');
 
-  const handleRevoke = (id, name) => {
+  useEffect(() => {
+    loadGrants();
+  }, [role]);
+
+  const loadGrants = async () => {
+    try {
+      if (role === 'patient') {
+        const res = await api.get('/patient/doctor-access-list');
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          const mapped = res.data.map(d => ({
+            id: d.doctor_id,
+            name: `Dr. ${d.doctor_name}`,
+            type: d.specialization || 'Attending Physician',
+            facility: d.hospital_name || 'Affiliated Hospital',
+            scope: d.consent_notes || 'Complete Diagnostic & Laboratory Profile',
+            grantedDate: d.granted_at ? d.granted_at.split('T')[0] : '2026-01-15',
+            status: d.access_status === 'GRANTED' ? 'Active Consent' : 'Revoked by Patient'
+          }));
+          setGrants(mapped);
+          return;
+        }
+      }
+      setGrants(mockAccessGrants);
+    } catch (e) {
+      setGrants(mockAccessGrants);
+    }
+  };
+
+  const handleRevoke = async (id, name) => {
+    try {
+      await api.post('/patient/revoke-doctor-access', { doctor_id: id });
+    } catch (e) {
+      console.warn('Backend revoke consent note:', e.message);
+    }
     setGrants(
       grants.map((g) =>
         g.id === id ? { ...g, status: 'Revoked by Patient' } : g

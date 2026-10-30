@@ -512,3 +512,4 @@ export const CLINICAL_MEDICINES = ${JSON.stringify(medicines, null, 2)};
 }
 
 run().catch(console.error);
+

@@ -29,6 +29,8 @@ import {
   KeyRound,
   Lock,
   History,
+  BookOpen,
+  Sparkles,
 } from 'lucide-react';
 
 export default function Sidebar({ isOpen, onClose }) {
@@ -69,7 +71,9 @@ export default function Sidebar({ isOpen, onClose }) {
         { label: 'My Health Profile', path: '/patient/profile', icon: User },
         { label: 'Prescriptions', path: '/patient/prescriptions', icon: FileText },
         { label: 'Medicines', path: '/patient/medicines', icon: Pill },
+        { label: 'Medicine Knowledge Base', path: '/patient/medicine-knowledge', icon: BookOpen },
         { label: 'Medical Reports', path: '/patient/reports', icon: FileCheck2 },
+        { label: 'AI Report Analyzer', path: '/patient/report-analyzer', icon: Sparkles },
         { label: 'Health Timeline', path: '/patient/timeline', icon: GitCommit },
         { label: 'Health Twin', path: '/patient/health-twin', icon: Activity },
         { label: 'Follow-ups', path: '/patient/follow-ups', icon: Clock },

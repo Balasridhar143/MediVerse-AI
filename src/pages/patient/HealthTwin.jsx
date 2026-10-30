@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   mockMedicines,
-  mockMedicalReports,
   mockVitalsHistory,
   mockFollowUps,
 } from '../../data/mockData';
+import { reportService } from '../../services/reportService';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import StatusBadge from '../../components/StatusBadge';
@@ -35,6 +35,12 @@ import {
  * Designed strictly as a structured clinical summary avoiding sci-fi 3D digital human aesthetics.
  */
 export default function HealthTwin() {
+  const [reports, setReports] = useState([]);
+
+  useEffect(() => {
+    reportService.getReports().then((data) => setReports(data || []));
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Page Header */}
@@ -191,16 +197,22 @@ export default function HealthTwin() {
 
         <Card title="Recent Diagnostic Reports" icon={FileCheck2}>
           <div className="space-y-2 text-xs">
-            {mockMedicalReports.slice(0, 2).map((r) => (
-              <div key={r.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-                <div className="flex justify-between font-semibold text-slate-800">
-                  <span>{r.name}</span>
-                  <StatusBadge status={r.status} size="xs" />
+            {reports.length > 0 ? (
+              reports.slice(0, 2).map((r) => (
+                <div key={r.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
+                  <div className="flex justify-between font-semibold text-slate-800">
+                    <span>{r.reportName}</span>
+                    <StatusBadge status={r.status} size="xs" />
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">{r.date} • {r.reportType}</p>
+                  <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{r.shortPreview}</p>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">{r.date} • {r.type}</p>
-                <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{r.findings}</p>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="p-3 bg-slate-50 rounded text-slate-500 text-[11px] text-center">
+                No diagnostic reports uploaded yet.
+              </p>
+            )}
           </div>
         </Card>
 

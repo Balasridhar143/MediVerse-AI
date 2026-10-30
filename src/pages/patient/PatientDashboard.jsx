@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { appointmentService } from '../../services/api';
+import { reportService } from '../../services/reportService';
 import {
   mockMedicines,
-  mockMedicalReports,
   mockVitalsHistory,
   mockFollowUps,
 } from '../../data/mockData';
@@ -52,13 +52,30 @@ export default function PatientDashboard() {
   const [realAppointments, setRealAppointments] = useState([]);
   const [loadingAppts, setLoadingAppts] = useState(true);
 
+  const [recentReport, setRecentReport] = useState(null);
+
   useEffect(() => {
     appointmentService.getMyAppointments()
       .then((data) => setRealAppointments(data || []))
       .catch((err) => console.error('Failed to fetch patient appointments:', err))
       .finally(() => setLoadingAppts(false));
-  }, []);
 
+    reportService.getReports()
+      .then((reps) => {
+        if (reps && reps.length > 0) {
+          const r = reps[0];
+          setRecentReport({
+            name: r.reportName,
+            status: r.status,
+            date: r.date,
+            type: r.reportType,
+            lab: r.hospital,
+            findings: r.shortPreview || r.detailedFindings || 'Laboratory analysis ready.'
+          });
+        }
+      })
+      .catch((err) => console.error('Failed to fetch recent report:', err));
+  }, []);
   const [latestVitals, setLatestVitals] = useState({
     bp: '124/80',
     heartRate: 72,
@@ -75,7 +92,6 @@ export default function PatientDashboard() {
   const nextAppointment = realAppointments.find(
     (a) => (a.status || '').toUpperCase() === 'CONFIRMED' || (a.status || '').toUpperCase() === 'PENDING'
   ) || null;
-  const recentReport = mockMedicalReports[0];
   const upcomingFollowUp = mockFollowUps && mockFollowUps.length > 0 ? mockFollowUps[0] : null;
 
   const toggleMedicineStatus = (medId) => {

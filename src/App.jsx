@@ -18,7 +18,9 @@ import Appointments from './pages/patient/Appointments';
 import Consultation from './pages/patient/Consultation';
 import Prescriptions from './pages/patient/Prescriptions';
 import Medicines from './pages/patient/Medicines';
+import MedicineKnowledgeBase from './pages/patient/MedicineKnowledgeBase';
 import MedicalReports from './pages/patient/MedicalReports';
+import ReportAnalyzer from './pages/patient/ReportAnalyzer';
 import HealthTimeline from './pages/patient/HealthTimeline';
 import HealthTwin from './pages/patient/HealthTwin';
 import FollowUps from './pages/patient/FollowUps';
@@ -199,7 +201,9 @@ export default function App() {
             <Route path="/patient/consultation" element={<Consultation />} />
             <Route path="/patient/prescriptions" element={<Prescriptions />} />
             <Route path="/patient/medicines" element={<Medicines />} />
+            <Route path="/patient/medicine-knowledge" element={<MedicineKnowledgeBase />} />
             <Route path="/patient/reports" element={<MedicalReports />} />
+            <Route path="/patient/report-analyzer" element={<ReportAnalyzer />} />
             <Route path="/patient/timeline" element={<HealthTimeline />} />
             <Route path="/patient/health-timeline" element={<HealthTimeline />} />
             <Route path="/patient/health-twin" element={<HealthTwin />} />

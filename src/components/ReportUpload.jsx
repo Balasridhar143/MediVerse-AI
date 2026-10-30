@@ -135,10 +135,10 @@ export default function ReportUpload({
       setStage('processing');
       await new Promise((resolve) => setTimeout(resolve, 800));
 
-      // Step 3: Ready state
-      const createdReport = await reportService.uploadReport({
+      // Step 3: Real AI RAG Pipeline & Database Persistence
+      const result = await reportService.analyzeReport({
         file: selectedFile,
-        reportName,
+        reportName: reportName || selectedFile.name.replace(/\.[^/.]+$/, ''),
         reportType,
         hospital,
         doctor,
@@ -146,8 +146,8 @@ export default function ReportUpload({
 
       setStage('ready');
 
-      if (onUploadSuccess) {
-        onUploadSuccess(createdReport);
+      if (onUploadSuccess && result.report) {
+        onUploadSuccess(result.report);
       }
     } catch (err) {
       clearInterval(interval);

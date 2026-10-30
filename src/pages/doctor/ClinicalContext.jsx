@@ -36,14 +36,18 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { mockVitalsHistory, mockMedicines } from '../../data/mockData';
-import { mockMedicalReports } from '../../data/reports';
+import { reportService } from '../../services/reportService';
 
 export default function ClinicalContext() {
-  const [reportsList, setReportsList] = useState(mockMedicalReports);
+  const [reportsList, setReportsList] = useState([]);
   const [viewingReport, setViewingReport] = useState(null);
   const [noteModalReport, setNoteModalReport] = useState(null);
   const [noteText, setNoteText] = useState('');
   const [reviewedNotice, setReviewedNotice] = useState('');
+
+  React.useEffect(() => {
+    reportService.getReports().then((data) => setReportsList(data || []));
+  }, []);
 
   const handleMarkAsReviewed = (reportId) => {
     setReportsList((prev) =>

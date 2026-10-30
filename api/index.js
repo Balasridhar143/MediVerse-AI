@@ -6,6 +6,8 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS, CLINICAL_MEDICINES as DATASET_MEDICINES } from './datasets.js';
 import { sendOtpEmail } from './email.js';
+import { CLINICAL_DRUG_CLASSES, enrichMedicineKnowledge, MEDICAL_DISCLAIMER } from './medicineKnowledge.js';
+import { executeMedicalReportRAGPipeline, CLINICAL_RAG_KNOWLEDGE_BASE } from './reportRAG.js';
 
 const app = express();
 
@@ -241,9 +243,96 @@ async function ensureTables(sql) {
     await sql`CREATE INDEX IF NOT EXISTS idx_signals_room_id ON consultation_signals(room_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_signals_created_at ON consultation_signals(created_at);`;
 
+    // 11. Extend medical_reports for RAG and PDF metadata
+    await sql`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='extracted_text') THEN
+          ALTER TABLE medical_reports ADD COLUMN extracted_text TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='rag_citations') THEN
+          ALTER TABLE medical_reports ADD COLUMN rag_citations JSONB;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_name') THEN
+          ALTER TABLE medical_reports ADD COLUMN file_name VARCHAR(256);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_size') THEN
+          ALTER TABLE medical_reports ADD COLUMN file_size INT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_type') THEN
+          ALTER TABLE medical_reports ADD COLUMN file_type VARCHAR(64);
+        END IF;
+      END $$;
+    `;
+
+    // 12. Doctor-Patient Consent Relationships
+    await sql`
+      CREATE TABLE IF NOT EXISTS doctor_patient_relationships (
+        id VARCHAR(64) PRIMARY KEY,
+        patient_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        doctor_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        access_status VARCHAR(32) NOT NULL DEFAULT 'GRANTED',
+        consent_notes TEXT,
+        granted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        CONSTRAINT uq_doctor_patient UNIQUE(patient_id, doctor_id)
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_dpr_patient ON doctor_patient_relationships(patient_id);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_dpr_doctor ON doctor_patient_relationships(doctor_id);`;
+
+    // 13. Audit Logs
+    await sql`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64),
+        user_role VARCHAR(32),
+        user_email VARCHAR(128),
+        action VARCHAR(64) NOT NULL,
+        resource VARCHAR(64) NOT NULL,
+        resource_id VARCHAR(64),
+        details JSONB,
+        ip_address VARCHAR(64),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at DESC);`;
+
+    // 14. Medical Knowledge Cache
+    await sql`
+      CREATE TABLE IF NOT EXISTS medical_knowledge (
+        id VARCHAR(64) PRIMARY KEY,
+        title VARCHAR(256) NOT NULL,
+        source_org VARCHAR(128) NOT NULL,
+        source_url VARCHAR(512),
+        category VARCHAR(128) NOT NULL,
+        content TEXT NOT NULL,
+        verified_date VARCHAR(64),
+        metadata JSONB,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_med_knowledge_cat ON medical_knowledge(category);`;
+
     tablesInitialized = true;
   } catch (e) {
     console.error('Error ensuring tables exist:', e);
+  }
+}
+
+// Audit logger helper
+async function logAuditEvent(sql, { userId, role, email, action, resource, resourceId, details, ip }) {
+  try {
+    const logId = `aud_${crypto.randomBytes(6).toString('hex')}`;
+    await sql`
+      INSERT INTO audit_logs (id, user_id, user_role, user_email, action, resource, resource_id, details, ip_address, created_at)
+      VALUES (${logId}, ${userId || null}, ${role || 'anonymous'}, ${email || null}, ${action}, ${resource}, ${resourceId || null}, ${JSON.stringify(details || {})}, ${ip || null}, NOW());
+    `;
+  } catch (err) {
+    console.error('Audit log write error:', err.message);
   }
 }
 
@@ -1145,16 +1234,17 @@ app.post(['/rag/query', '/api/rag/query'], (req, res) => {
 });
 
 // ==========================================
-// 7. MEDICAL REPORTS PERSISTENCE
+// 7. MEDICAL REPORTS & RAG PIPELINE
 // ==========================================
 app.get(['/reports', '/api/reports'], async (req, res) => {
   try {
-    let userId = null;
+    let user = null;
     const authHeader = req.headers['authorization'];
     if (authHeader) {
       try {
         const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
-        userId = decoded.sub || decoded.id;
+        user = decoded;
+        if (!user.id && user.sub) user.id = user.sub;
       } catch (e) {}
     }
 
@@ -1162,21 +1252,292 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
     await ensureTables(sql);
 
     let reports = [];
-    if (userId) {
-      reports = await sql`
-        SELECT id, patient_id, patient_name, report_name, report_type, hospital, doctor, status, date, parameters, structured_data, ai_explanation, created_at
-        FROM medical_reports
-        WHERE user_id = ${userId}
-        ORDER BY created_at DESC;
-      `;
+    if (user && user.id) {
+      if (user.role === 'doctor') {
+        // Doctors can see reports for patients who have granted active consent
+        reports = await sql`
+          SELECT r.id, r.user_id, r.patient_id, r.patient_name, r.report_name, r.report_type,
+                 r.hospital, r.doctor, r.status, r.date, r.parameters, r.structured_data,
+                 r.ai_explanation, r.rag_citations, r.file_name, r.file_size, r.file_type, r.created_at
+          FROM medical_reports r
+          JOIN doctor_patient_relationships dpr ON r.user_id = dpr.patient_id
+          WHERE dpr.doctor_id = ${user.id} AND dpr.access_status = 'GRANTED'
+          ORDER BY r.created_at DESC;
+        `;
+      } else if (user.role === 'hospital_admin' || user.role === 'admin') {
+        // Admin can see all facility or system reports
+        reports = await sql`
+          SELECT id, user_id, patient_id, patient_name, report_name, report_type,
+                 hospital, doctor, status, date, parameters, structured_data,
+                 ai_explanation, rag_citations, file_name, file_size, file_type, created_at
+          FROM medical_reports
+          ORDER BY created_at DESC
+          LIMIT 100;
+        `;
+      } else {
+        // Patient can see ONLY their own reports
+        reports = await sql`
+          SELECT id, user_id, patient_id, patient_name, report_name, report_type,
+                 hospital, doctor, status, date, parameters, structured_data,
+                 ai_explanation, rag_citations, file_name, file_size, file_type, created_at
+          FROM medical_reports
+          WHERE user_id = ${user.id}
+          ORDER BY created_at DESC;
+        `;
+      }
     }
 
     return res.json(reports);
   } catch (err) {
+    console.error('Fetch reports error:', err);
     return res.status(500).json({ detail: `Failed to fetch reports: ${err.message}` });
   }
 });
 
+// Get specific report by ID (with RBAC verification)
+app.get(['/reports/:id', '/api/reports/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    let user = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+        user = decoded;
+        if (!user.id && user.sub) user.id = user.sub;
+      } catch (e) {}
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, user_id, patient_id, patient_name, report_name, report_type,
+             hospital, doctor, status, date, parameters, structured_data,
+             ai_explanation, extracted_text, rag_citations, file_name, file_size, file_type, created_at
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    const report = rows[0];
+
+    // RBAC check: Must be owner, consented doctor, or admin
+    if (user && user.id) {
+      const isOwner = report.user_id === user.id;
+      const isAdmin = user.role === 'hospital_admin' || user.role === 'admin';
+      let isConsentedDoctor = false;
+
+      if (user.role === 'doctor') {
+        const consentCheck = await sql`
+          SELECT id FROM doctor_patient_relationships
+          WHERE patient_id = ${report.user_id} AND doctor_id = ${user.id} AND access_status = 'GRANTED'
+          LIMIT 1;
+        `;
+        isConsentedDoctor = consentCheck.length > 0;
+      }
+
+      if (!isOwner && !isAdmin && !isConsentedDoctor) {
+        return res.status(403).json({ detail: 'Access denied: You do not have patient consent to inspect this medical record.' });
+      }
+    }
+
+    // Log access audit event
+    await logAuditEvent(sql, {
+      userId: user ? user.id : null,
+      role: user ? user.role : 'guest',
+      email: user ? user.email : null,
+      action: 'REPORT_VIEW',
+      resource: 'medical_reports',
+      resourceId: id,
+      details: { report_name: report.report_name, patient_name: report.patient_name },
+      ip: req.ip
+    });
+
+    return res.json(report);
+  } catch (err) {
+    console.error('Fetch single report error:', err);
+    return res.status(500).json({ detail: `Error loading report: ${err.message}` });
+  }
+});
+
+// Delete medical report
+app.delete(['/reports/:id', '/api/reports/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    let user = null;
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) {
+      return res.status(401).json({ detail: 'Authentication required to delete medical records.' });
+    }
+    try {
+      user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+      if (!user.id && user.sub) user.id = user.sub;
+    } catch (e) {
+      return res.status(401).json({ detail: 'Invalid or expired session.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const existing = await sql`SELECT id, user_id, report_name FROM medical_reports WHERE id = ${id} LIMIT 1;`;
+    if (existing.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    const report = existing[0];
+    if (report.user_id !== user.id && user.role !== 'hospital_admin' && user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Unauthorized: You can only delete your own medical reports.' });
+    }
+
+    await sql`DELETE FROM medical_reports WHERE id = ${id};`;
+
+    await logAuditEvent(sql, {
+      userId: user.id,
+      role: user.role,
+      email: user.email,
+      action: 'REPORT_DELETE',
+      resource: 'medical_reports',
+      resourceId: id,
+      details: { report_name: report.report_name },
+      ip: req.ip
+    });
+
+    return res.json({ success: true, message: 'Medical report securely removed.' });
+  } catch (err) {
+    console.error('Delete report error:', err);
+    return res.status(500).json({ detail: `Failed to delete report: ${err.message}` });
+  }
+});
+
+// End-to-End AI Medical Report RAG Analysis Pipeline
+app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
+  try {
+    let user = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+        user = decoded;
+        if (!user.id && user.sub) user.id = user.sub;
+      } catch (e) {}
+    }
+
+    const {
+      file_data,
+      file_name = 'Diagnostic_Report.pdf',
+      file_type = 'application/pdf',
+      file_size = 0,
+      patient_name,
+      report_name = 'Diagnostic Laboratory Report',
+      report_type = 'Blood Tests',
+      hospital = 'Accredited Diagnostic Laboratory',
+      doctor = 'Attending Physician',
+      raw_text = ''
+    } = req.body;
+
+    let fileBuffer = null;
+    if (file_data) {
+      try {
+        const base64Data = file_data.replace(/^data:[^;]+;base64,/, '');
+        fileBuffer = Buffer.from(base64Data, 'base64');
+      } catch (e) {
+        console.warn('Failed to parse base64 file data:', e.message);
+      }
+    }
+
+    // Execute End-to-End RAG Analysis
+    const ragAnalysis = await executeMedicalReportRAGPipeline({
+      fileBuffer,
+      fileName: file_name,
+      mimeType: file_type,
+      patientName: patient_name || (user && user.full_name) || 'Patient',
+      reportType: report_type,
+      hospital,
+      rawText: raw_text
+    });
+
+    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const targetUserId = user ? user.id : null;
+    const patientDisplayName = patient_name || (user && user.full_name) || 'Patient Record';
+
+    // Persist to Neon PostgreSQL
+    await sql`
+      INSERT INTO medical_reports (
+        id, user_id, patient_name, report_name, report_type,
+        hospital, doctor, status, date,
+        parameters, structured_data, ai_explanation,
+        extracted_text, rag_citations, file_name, file_size, file_type, created_at
+      ) VALUES (
+        ${reportId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
+        ${hospital}, ${doctor}, 'Ready', ${todayStr},
+        ${JSON.stringify(ragAnalysis.parameters || [])},
+        ${JSON.stringify(ragAnalysis.structured_data || {})},
+        ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+        ${ragAnalysis.extracted_text || ''},
+        ${JSON.stringify(ragAnalysis.rag_citations || [])},
+        ${file_name},
+        ${file_size || (fileBuffer ? fileBuffer.length : 0)},
+        ${file_type},
+        NOW()
+      );
+    `;
+
+    // Log audit entry
+    await logAuditEvent(sql, {
+      userId: targetUserId,
+      role: user ? user.role : 'patient',
+      email: user ? user.email : null,
+      action: 'REPORT_ANALYZE',
+      resource: 'medical_reports',
+      resourceId: reportId,
+      details: {
+        report_name,
+        report_type,
+        parameter_count: ragAnalysis.parameters.length,
+        abnormal_count: ragAnalysis.structured_data.abnormal_parameters,
+        citations_count: ragAnalysis.rag_citations.length
+      },
+      ip: req.ip
+    });
+
+    return res.status(201).json({
+      success: true,
+      report_id: reportId,
+      report: {
+        id: reportId,
+        user_id: targetUserId,
+        patient_name: patientDisplayName,
+        report_name,
+        report_type,
+        hospital,
+        doctor,
+        status: 'Ready',
+        date: todayStr,
+        parameters: ragAnalysis.parameters,
+        structured_data: ragAnalysis.structured_data,
+        ai_explanation: ragAnalysis.ai_explanation,
+        rag_citations: ragAnalysis.rag_citations,
+        file_name,
+        created_at: new Date().toISOString()
+      },
+      rag_analysis: ragAnalysis
+    });
+  } catch (err) {
+    console.error('Report analyze error:', err);
+    return res.status(500).json({ detail: `Medical Report RAG analysis failed: ${err.message}` });
+  }
+});
+
+// Standard report upload route (backward compatibility)
 app.post(['/reports/upload', '/api/reports/upload'], async (req, res) => {
   try {
     let userId = null;
@@ -1228,6 +1589,439 @@ app.post(['/reports/upload', '/api/reports/upload'], async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ detail: `Report upload failed: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 7.1 MEDICINE KNOWLEDGE BASE ENDPOINTS
+// ==========================================
+app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (req, res) => {
+  try {
+    const {
+      search = '',
+      q = '',
+      category = '',
+      dosage_form = '',
+      prescription_required,
+      limit = 24,
+      offset = 0
+    } = req.query;
+
+    const queryTerm = (search || q).toLowerCase().trim();
+    const catFilter = category.toLowerCase().trim();
+    const formFilter = dosage_form.toLowerCase().trim();
+    const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 24, 1), 100);
+    const parsedOffset = Math.max(parseInt(offset, 10) || 0, 0);
+
+    // Filter dataset
+    let filtered = DATASET_MEDICINES.filter((med) => {
+      if (queryTerm) {
+        const matchBrand = (med.brand_name || '').toLowerCase().includes(queryTerm);
+        const matchGeneric = (med.generic_name || '').toLowerCase().includes(queryTerm);
+        const matchComp = (med.composition || '').toLowerCase().includes(queryTerm);
+        const matchCat = (med.category || '').toLowerCase().includes(queryTerm);
+        const matchInd = (med.uses || '').toLowerCase().includes(queryTerm);
+        if (!matchBrand && !matchGeneric && !matchComp && !matchCat && !matchInd) {
+          return false;
+        }
+      }
+
+      if (catFilter && catFilter !== 'all') {
+        const mCat = (med.category || '').toLowerCase();
+        if (!mCat.includes(catFilter)) return false;
+      }
+
+      if (formFilter && formFilter !== 'all') {
+        const mForm = (med.dosage_form || '').toLowerCase();
+        if (!mForm.includes(formFilter)) return false;
+      }
+
+      if (prescription_required !== undefined && prescription_required !== '') {
+        const reqBool = prescription_required === 'true' || prescription_required === true;
+        if (Boolean(med.prescription_required) !== reqBool) return false;
+      }
+
+      return true;
+    });
+
+    const totalMatching = filtered.length;
+    const paginatedSlice = filtered.slice(parsedOffset, parsedOffset + parsedLimit);
+
+    // Enrich each item with authoritative clinical annotations
+    const enrichedItems = paginatedSlice.map(enrichMedicineKnowledge);
+
+    // Gather distinct categories and dosage forms
+    const categoriesSet = new Set();
+    const dosageFormsSet = new Set();
+    DATASET_MEDICINES.forEach((m) => {
+      if (m.category) categoriesSet.add(m.category);
+      if (m.dosage_form) dosageFormsSet.add(m.dosage_form);
+    });
+
+    // Auto-suggestions if searching
+    const suggestions = queryTerm && queryTerm.length >= 2
+      ? DATASET_MEDICINES
+          .filter(m => (m.brand_name || '').toLowerCase().includes(queryTerm) || (m.generic_name || '').toLowerCase().includes(queryTerm))
+          .slice(0, 6)
+          .map(m => ({ id: m.id, brand_name: m.brand_name, generic_name: m.generic_name, category: m.category }))
+      : [];
+
+    return res.json({
+      total: DATASET_MEDICINES.length,
+      total_matching: totalMatching,
+      limit: parsedLimit,
+      offset: parsedOffset,
+      medicines: enrichedItems,
+      categories: Array.from(categoriesSet).sort(),
+      dosage_forms: Array.from(dosageFormsSet).sort(),
+      suggestions,
+      disclaimer: MEDICAL_DISCLAIMER
+    });
+  } catch (err) {
+    console.error('Medicine knowledge base error:', err);
+    return res.status(500).json({ detail: `Failed to load medicine knowledge: ${err.message}` });
+  }
+});
+
+// Single medicine clinical monograph & knowledge profile
+app.get(['/medicines/:id/knowledge', '/api/medicines/:id/knowledge'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const targetId = String(id).toLowerCase().trim();
+
+    const rawMed = DATASET_MEDICINES.find(m => 
+      String(m.id).toLowerCase() === targetId ||
+      (m.brand_name && m.brand_name.toLowerCase().replace(/[^a-z0-9]/g, '-') === targetId)
+    );
+
+    if (!rawMed) {
+      return res.status(404).json({ detail: `Medicine not found for identifier: ${id}` });
+    }
+
+    const enriched = enrichMedicineKnowledge(rawMed);
+
+    // Find related medicines (same category or active class, excluding self)
+    const related = DATASET_MEDICINES
+      .filter(m => m.id !== rawMed.id && (m.category === rawMed.category || (rawMed.generic_name && m.generic_name && m.generic_name.split(' ')[0] === rawMed.generic_name.split(' ')[0])))
+      .slice(0, 4)
+      .map(enrichMedicineKnowledge);
+
+    return res.json({
+      medicine: enriched,
+      related_medicines: related,
+      disclaimer: MEDICAL_DISCLAIMER
+    });
+  } catch (err) {
+    console.error('Medicine monograph lookup error:', err);
+    return res.status(500).json({ detail: `Error loading medicine knowledge profile: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 7.2 PATIENT-DOCTOR CONSENT MANAGEMENT
+// ==========================================
+// Patient grants access to a doctor
+app.post(['/patient/grant-doctor-access', '/api/patient/grant-doctor-access'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    const patientId = user.id || user.sub;
+
+    const { doctor_id, consent_notes = 'Patient granted clinical records access' } = req.body;
+    if (!doctor_id) {
+      return res.status(400).json({ detail: 'doctor_id is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // Verify doctor exists
+    const docRows = await sql`
+      SELECT d.id, d.user_id, COALESCE(u.full_name, d.full_name) as doctor_name
+      FROM doctors d
+      LEFT JOIN users u ON d.user_id = u.id
+      WHERE d.id = ${doctor_id} OR d.user_id = ${doctor_id}
+      LIMIT 1;
+    `;
+    if (docRows.length === 0) {
+      return res.status(404).json({ detail: 'Doctor profile not found.' });
+    }
+
+    const doc = docRows[0];
+    const docUserId = doc.user_id || doc.id;
+    const relId = `dpr_${crypto.randomBytes(6).toString('hex')}`;
+
+    await sql`
+      INSERT INTO doctor_patient_relationships (
+        id, patient_id, doctor_id, access_status, consent_notes, granted_at, revoked_at, created_at
+      ) VALUES (
+        ${relId}, ${patientId}, ${docUserId}, 'GRANTED', ${consent_notes}, NOW(), NULL, NOW()
+      )
+      ON CONFLICT (patient_id, doctor_id) DO UPDATE SET
+        access_status = 'GRANTED',
+        consent_notes = ${consent_notes},
+        granted_at = NOW(),
+        revoked_at = NULL;
+    `;
+
+    await logAuditEvent(sql, {
+      userId: patientId,
+      role: 'patient',
+      email: user.email,
+      action: 'ACCESS_GRANTED',
+      resource: 'doctor_patient_relationships',
+      resourceId: docUserId,
+      details: { doctor_name: doc.doctor_name, notes: consent_notes },
+      ip: req.ip
+    });
+
+    return res.json({
+      success: true,
+      message: `Medical records access granted to Dr. ${doc.doctor_name}.`,
+      access_status: 'GRANTED'
+    });
+  } catch (err) {
+    console.error('Grant doctor access error:', err);
+    return res.status(500).json({ detail: `Grant consent failed: ${err.message}` });
+  }
+});
+
+// Patient revokes access from a doctor
+app.post(['/patient/revoke-doctor-access', '/api/patient/revoke-doctor-access'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    const patientId = user.id || user.sub;
+
+    const { doctor_id } = req.body;
+    if (!doctor_id) {
+      return res.status(400).json({ detail: 'doctor_id is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    await sql`
+      UPDATE doctor_patient_relationships
+      SET access_status = 'REVOKED', revoked_at = NOW()
+      WHERE patient_id = ${patientId} AND (doctor_id = ${doctor_id} OR doctor_id IN (SELECT user_id FROM doctors WHERE id = ${doctor_id}));
+    `;
+
+    await logAuditEvent(sql, {
+      userId: patientId,
+      role: 'patient',
+      email: user.email,
+      action: 'ACCESS_REVOKED',
+      resource: 'doctor_patient_relationships',
+      resourceId: doctor_id,
+      details: { action: 'Patient manually revoked access' },
+      ip: req.ip
+    });
+
+    return res.json({
+      success: true,
+      message: 'Doctor access revoked successfully.',
+      access_status: 'REVOKED'
+    });
+  } catch (err) {
+    console.error('Revoke doctor access error:', err);
+    return res.status(500).json({ detail: `Revoke consent failed: ${err.message}` });
+  }
+});
+
+// Patient lists their granted doctor accesses
+app.get(['/patient/doctor-access-list', '/api/patient/doctor-access-list'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    const patientId = user.id || user.sub;
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const relationships = await sql`
+      SELECT dpr.id, dpr.doctor_id, dpr.access_status, dpr.consent_notes, dpr.granted_at, dpr.revoked_at,
+             COALESCE(u.full_name, d.full_name) as doctor_name,
+             COALESCE(d.specialization, 'General Medicine') as specialization,
+             COALESCE(d.hospital_name, 'Affiliated Hospital') as hospital_name
+      FROM doctor_patient_relationships dpr
+      JOIN users u ON dpr.doctor_id = u.id
+      LEFT JOIN doctors d ON d.user_id = u.id
+      WHERE dpr.patient_id = ${patientId}
+      ORDER BY dpr.granted_at DESC;
+    `;
+
+    return res.json(relationships);
+  } catch (err) {
+    console.error('Fetch access list error:', err);
+    return res.status(500).json({ detail: `Failed to fetch access list: ${err.message}` });
+  }
+});
+
+// Doctor lists patients who have granted active access
+app.get(['/doctor/consented-patients', '/api/doctor/consented-patients'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    const doctorUserId = user.id || user.sub;
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const consentedPatients = await sql`
+      SELECT dpr.id as relationship_id, dpr.granted_at,
+             u.id as patient_user_id, u.full_name as patient_name, u.email as patient_email,
+             p.age, p.gender, p.blood_group, p.phone,
+             (SELECT COUNT(*) FROM medical_reports r WHERE r.user_id = u.id) as report_count
+      FROM doctor_patient_relationships dpr
+      JOIN users u ON dpr.patient_id = u.id
+      LEFT JOIN patients p ON p.user_id = u.id
+      WHERE dpr.doctor_id = ${doctorUserId} AND dpr.access_status = 'GRANTED'
+      ORDER BY dpr.granted_at DESC;
+    `;
+
+    return res.json(consentedPatients);
+  } catch (err) {
+    console.error('Fetch consented patients error:', err);
+    return res.status(500).json({ detail: `Failed to fetch consented patients: ${err.message}` });
+  }
+});
+
+// Doctor views specific consented patient's reports
+app.get(['/doctor/patient/:id/reports', '/api/doctor/patient/:id/reports'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    const doctorUserId = user.id || user.sub;
+    const targetPatientId = req.params.id;
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // Check active consent
+    const consentCheck = await sql`
+      SELECT id FROM doctor_patient_relationships
+      WHERE patient_id = ${targetPatientId} AND doctor_id = ${doctorUserId} AND access_status = 'GRANTED'
+      LIMIT 1;
+    `;
+
+    if (consentCheck.length === 0 && user.role !== 'hospital_admin' && user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Patient has not granted active consent for your account to review these medical records.' });
+    }
+
+    const patientReports = await sql`
+      SELECT id, patient_name, report_name, report_type, hospital, doctor, status, date,
+             parameters, structured_data, ai_explanation, rag_citations, file_name, created_at
+      FROM medical_reports
+      WHERE user_id = ${targetPatientId}
+      ORDER BY created_at DESC;
+    `;
+
+    return res.json(patientReports);
+  } catch (err) {
+    console.error('Doctor view patient reports error:', err);
+    return res.status(500).json({ detail: `Error loading patient reports: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 7.3 ADMINISTRATOR AUDIT & SYSTEM ENDPOINTS
+// ==========================================
+app.get(['/admin/audit-logs', '/api/admin/audit-logs'], async (req, res) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401).json({ detail: 'Admin authentication required.' });
+    const user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    if (user.role !== 'hospital_admin' && user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Administrative privilege required.' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const logs = await sql`
+      SELECT id, user_id, user_role, user_email, action, resource, resource_id, details, ip_address, created_at
+      FROM audit_logs
+      ORDER BY created_at DESC
+      LIMIT ${limit} OFFSET ${offset};
+    `;
+
+    const countResult = await sql`SELECT COUNT(*) as count FROM audit_logs;`;
+
+    return res.json({
+      total: parseInt(countResult[0].count, 10),
+      logs
+    });
+  } catch (err) {
+    console.error('Audit logs fetch error:', err);
+    return res.status(500).json({ detail: `Failed to fetch audit logs: ${err.message}` });
+  }
+});
+
+app.get(['/admin/statistics', '/api/admin/statistics'], async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const [userStats] = await sql`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(*) FILTER (WHERE role = 'patient') as total_patients,
+        COUNT(*) FILTER (WHERE role = 'doctor') as total_doctors,
+        COUNT(*) FILTER (WHERE role IN ('hospital_admin', 'admin')) as total_admins
+      FROM users;
+    `;
+
+    const [reportStats] = await sql`
+      SELECT COUNT(*) as total_reports FROM medical_reports;
+    `;
+
+    const [appointmentStats] = await sql`
+      SELECT 
+        COUNT(*) as total_appointments,
+        COUNT(*) FILTER (WHERE status = 'CONFIRMED') as confirmed_appointments,
+        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_appointments
+      FROM appointments;
+    `;
+
+    const [auditStats] = await sql`
+      SELECT COUNT(*) as total_audit_entries FROM audit_logs;
+    `;
+
+    return res.json({
+      users: userStats,
+      reports: reportStats,
+      appointments: appointmentStats,
+      audit: auditStats,
+      dataset_medicines_count: DATASET_MEDICINES.length,
+      dataset_hospitals_count: DATASET_HOSPITALS.length
+    });
+  } catch (err) {
+    console.error('Admin statistics error:', err);
+    return res.status(500).json({ detail: `Failed to load statistics: ${err.message}` });
+  }
+});
+
+app.get(['/admin/knowledge-base', '/api/admin/knowledge-base'], async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+    const docs = await sql`
+      SELECT id, title, source_org, source_url, category, content, verified_date, metadata, created_at
+      FROM medical_knowledge
+      ORDER BY verified_date DESC;
+    `;
+    return res.json(docs);
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to load knowledge base: ${err.message}` });
   }
 });
 

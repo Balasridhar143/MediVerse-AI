@@ -30,40 +30,17 @@ import ReportUpload from '../../components/ReportUpload';
 import MedicalTermCard from '../../components/MedicalTermCard';
 import AIPipelinePreview from '../../components/AIPipelinePreview';
 import UniversalLanguageSelector from '../../components/LanguageSelector';
-import { mockMedicalReports, REPORT_CATEGORIES, MEDICAL_GLOSSARY } from '../../data/reports';
+import { REPORT_CATEGORIES, MEDICAL_GLOSSARY } from '../../data/reports';
 import { reportService } from '../../services/reportService';
+import { Link } from 'react-router-dom';
 
 /**
  * MedicalReports
  * Advanced Medical Report Understanding & Workspace.
- * 
- * Top Section:
- * - "Medical Reports"
- * - "View, understand and track your medical reports in one place."
- * - Actions: [Upload Report], [Search Reports]
- * 
- * Summary Cards:
- * - Total Reports
- * - Recent Reports
- * - Doctor Reviewed
- * - Needs Review
- * 
- * Recent Reports with:
- * - Report Name, Report Type, Date, Hospital/Lab, Doctor, Status
- * - [Open Report], [Understand Report]
- * 
- * In-depth Report Reader with:
- * - Standard vs Easy Explanation View
- * - [UNDERSTAND MY REPORT] 7-step patient walkthrough
- * - Structured Lab Value Table with visual indicators (↓ Below, ✓ Within, ↑ Above)
- * - Click any test value for 4-level explanations
- * - Medical terms section
- * - Doctor review & note
- * - Longitudinal comparison & trend charts
  */
 export default function MedicalReports() {
-  const [reports, setReports] = useState(mockMedicalReports);
-  const [loading, setLoading] = useState(false);
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'compare' | 'trends' | 'terms' | 'timeline'
@@ -72,6 +49,22 @@ export default function MedicalReports() {
   const [activeReaderReport, setActiveReaderReport] = useState(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [globalLanguage, setGlobalLanguage] = useState('en');
+
+  useEffect(() => {
+    loadReports();
+  }, []);
+
+  const loadReports = async () => {
+    setLoading(true);
+    try {
+      const data = await reportService.getReports();
+      setReports(data || []);
+    } catch (err) {
+      console.error('Failed to load reports:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Search input ref to focus when clicking [Search Reports]
   const searchInputRef = useRef(null);
@@ -137,6 +130,17 @@ export default function MedicalReports() {
 
         {/* Action Buttons: [Upload Report], [Search Reports] */}
         <div className="flex items-center gap-2.5 flex-wrap">
+          <Link to="/patient/report-analyzer">
+            <Button
+              variant="outline"
+              size="sm"
+              icon={Sparkles}
+              className="bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100 text-xs font-bold"
+            >
+              AI Report Analyzer
+            </Button>
+          </Link>
+
           <Button
             variant="outline"
             size="sm"
@@ -363,7 +367,34 @@ export default function MedicalReports() {
           </div>
 
           {/* Reports Grid (Requirement 1) */}
-          {filteredReports.length > 0 ? (
+          {loading ? (
+            <div className="p-16 text-center bg-white border border-slate-200 rounded-2xl">
+              <div className="w-8 h-8 border-3 border-teal-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+              <p className="text-xs font-semibold text-slate-600">Loading your medical reports from database...</p>
+            </div>
+          ) : reports.length === 0 ? (
+            <div className="p-12 text-center bg-white border border-slate-200 rounded-2xl space-y-4 max-w-2xl mx-auto shadow-2xs">
+              <div className="w-16 h-16 bg-teal-50 rounded-2xl flex items-center justify-center mx-auto text-teal-700 border border-teal-100">
+                <FileCheck2 className="w-8 h-8" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900">No Medical Reports Uploaded Yet</h3>
+                <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto leading-relaxed">
+                  Your electronic health record repository is ready. Upload a laboratory test report (PDF, PNG, JPG) to run instant AI clinical analysis, reference range checks, and RAG guideline explanations.
+                </p>
+              </div>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <Link to="/patient/report-analyzer">
+                  <Button variant="primary" size="sm" icon={Sparkles} className="bg-teal-700 hover:bg-teal-800 text-xs font-bold">
+                    Open AI Report Analyzer
+                  </Button>
+                </Link>
+                <Button variant="outline" size="sm" icon={Upload} onClick={() => setIsUploadOpen(true)} className="text-xs font-bold">
+                  Quick Upload File
+                </Button>
+              </div>
+            </div>
+          ) : filteredReports.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredReports.map((report) => (
                 <ReportCard

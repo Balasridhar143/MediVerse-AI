@@ -1,169 +1,168 @@
 /**
  * src/services/reportService.js
- * Frontend client service prepared for future REST endpoints:
+ * Production Medical Reports Client Service
+ * Interacts with Neon PostgreSQL persistence & RAG pipeline endpoints:
  * - GET    /api/reports
- * - GET    /api/reports/{id}
+ * - GET    /api/reports/:id
+ * - POST   /api/reports/analyze (RAG analysis)
  * - POST   /api/reports/upload
- * - GET    /api/reports/{id}/explanation
- * - GET    /api/reports/{id}/history
- * - GET    /api/reports/{id}/comparison
- * 
- * In this Phase 3 frontend prototype, this service operates against the
- * in-memory mock reports database in src/data/reports.js.
+ * - DELETE /api/reports/:id
  */
 
-import { mockMedicalReports, MEDICAL_GLOSSARY } from '../data/reports';
 import api from './api';
 
-const getSavedLocalReports = () => {
-  try {
-    const raw = localStorage.getItem('mediverse_custom_reports');
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
-  }
-};
+const normalizeDbReport = (r) => {
+  if (!r) return null;
 
-let inMemoryReports = [...getSavedLocalReports(), ...mockMedicalReports];
+  const rawParams = r.parameters || [];
+  const normalizedParams = Array.isArray(rawParams) ? rawParams.map((p) => ({
+    name: p.test_name || p.name || 'Laboratory Marker',
+    value: p.patient_value !== undefined ? p.patient_value : p.value,
+    unit: p.unit || '',
+    referenceRange: p.reference_range || p.referenceRange || 'Standard reference bounds',
+    flag: p.status || p.flag || 'Normal',
+    is_critical: Boolean(p.is_critical),
+    meaning: p.meaning || p.easyMeaning || '',
+    possible_reasons: p.possible_reasons || p.whatItMeans || '',
+    explanation: p.explanation || ''
+  })) : [];
+
+  const rawStructured = r.structured_data || {};
+  const rawAi = r.ai_explanation || {};
+
+  return {
+    id: r.id,
+    patientId: r.patient_id || r.user_id || 'PAT-CURRENT',
+    patientName: r.patient_name || 'Patient Record',
+    reportName: r.report_name || r.reportName || 'Diagnostic Report',
+    reportType: r.report_type || r.reportType || 'Blood Tests',
+    category: r.report_type || r.category || 'Blood Tests',
+    hospital: r.hospital || 'Clinical Diagnostic Laboratory',
+    doctor: r.doctor || 'Attending Physician',
+    date: r.date || (r.created_at ? r.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+    status: r.status || 'Ready',
+    fileName: r.file_name || 'report.pdf',
+    parameters: normalizedParams,
+    rag_citations: r.rag_citations || [],
+    aiExplanation: {
+      originalFinding: rawStructured.important_findings || rawAi.findings_summary || 'Standard laboratory panel',
+      simpleExplanation: rawAi.summary || rawStructured.overall_summary || 'Analysis complete.',
+      whatThisMeans: rawAi.findings_summary || 'Review findings with your attending physician.',
+      recommendations: rawAi.recommendations || [],
+      questionsForDoctor: rawAi.doctor_discussion_questions || [],
+      disclaimer: rawAi.disclaimer || 'Educational and clinical decision support only.'
+    },
+    structured_data: rawStructured,
+    shortPreview: rawStructured.important_findings || rawAi.summary || 'Clinical laboratory analysis',
+    detailedFindings: rawStructured.overall_summary || rawAi.summary || 'Laboratory document successfully processed.'
+  };
+};
 
 export const reportService = {
   /**
    * GET /api/reports
-   * Fetches all reports with database retrieval and optional filtering
+   * Fetches real user-specific reports from Neon PostgreSQL
    */
   async getReports(filters = {}) {
     try {
-      const dbRes = await api.get('/reports');
-      if (Array.isArray(dbRes.data) && dbRes.data.length > 0) {
-        // Merge db reports with unique ids
-        const existingIds = new Set(dbRes.data.map((r) => r.id));
-        const nonDuplicateMock = mockMedicalReports.filter((m) => !existingIds.has(m.id));
-        inMemoryReports = [...dbRes.data, ...nonDuplicateMock];
+      const res = await api.get('/reports');
+      const rawList = Array.isArray(res.data) ? res.data : [];
+      let results = rawList.map(normalizeDbReport);
+
+      if (filters.search) {
+        const q = filters.search.toLowerCase();
+        results = results.filter(
+          (r) =>
+            r.reportName.toLowerCase().includes(q) ||
+            r.hospital.toLowerCase().includes(q) ||
+            r.doctor.toLowerCase().includes(q) ||
+            r.reportType.toLowerCase().includes(q)
+        );
       }
-    } catch (e) {
-      // Fallback to local memory / storage
-      inMemoryReports = [...getSavedLocalReports(), ...mockMedicalReports];
+
+      if (filters.category && filters.category !== 'All') {
+        results = results.filter((r) => r.category.toLowerCase() === filters.category.toLowerCase() || r.reportType.toLowerCase() === filters.category.toLowerCase());
+      }
+
+      if (filters.status && filters.status !== 'All') {
+        results = results.filter((r) => r.status.toLowerCase() === filters.status.toLowerCase());
+      }
+
+      return results;
+    } catch (err) {
+      console.warn('Failed to fetch medical reports from database:', err.message);
+      return [];
     }
-
-    let results = [...inMemoryReports];
-
-    if (filters.search) {
-      const q = filters.search.toLowerCase();
-      results = results.filter(
-        (r) =>
-          r.reportName.toLowerCase().includes(q) ||
-          r.hospital.toLowerCase().includes(q) ||
-          r.doctor.toLowerCase().includes(q) ||
-          r.shortPreview.toLowerCase().includes(q) ||
-          r.reportType.toLowerCase().includes(q)
-      );
-    }
-
-    if (filters.category && filters.category !== 'All') {
-      results = results.filter((r) => {
-        if (filters.category === 'Imaging') {
-          return ['Imaging', 'X-Ray', 'CT', 'MRI', 'Ultrasound'].includes(r.category);
-        }
-        return r.category.toLowerCase() === filters.category.toLowerCase();
-      });
-    }
-
-    if (filters.status && filters.status !== 'All') {
-      results = results.filter((r) => r.status.toLowerCase() === filters.status.toLowerCase());
-    }
-
-    if (filters.hospital && filters.hospital !== 'All') {
-      results = results.filter((r) => r.hospital.toLowerCase().includes(filters.hospital.toLowerCase()));
-    }
-
-    return results;
   },
 
   /**
-   * GET /api/reports/{id}
+   * GET /api/reports/:id
    */
   async getReportById(id) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    return inMemoryReports.find((r) => r.id === id) || null;
+    try {
+      const res = await api.get(`/reports/${id}`);
+      return normalizeDbReport(res.data);
+    } catch (err) {
+      console.error(`Failed to fetch report ${id}:`, err);
+      return null;
+    }
   },
 
   /**
-   * POST /api/reports/upload
-   * Simulates file upload, validation, and addition to frontend memory state
+   * POST /api/reports/analyze
+   * Full clinical RAG analysis pipeline
    */
-  async uploadReport({ file, reportName, reportType, hospital, doctor, specimen }) {
-    await new Promise((resolve) => setTimeout(resolve, 600));
-
-    const todayStr = '2026-09-25';
-    const newReport = {
-      id: `rep_${Date.now()}`,
-      patientId: 'PID-2026-089',
-      patientName: 'Rahul Sharma',
-      reportName: reportName || file.name.replace(/\.[^/.]+$/, ''),
-      reportType: reportType || 'Blood Tests',
-      category: reportType || 'Blood Tests',
-      hospital: hospital || 'City Care Diagnostics Laboratory',
-      lab: hospital || 'City Care Diagnostics Laboratory',
-      doctor: doctor || 'Dr. Arun Kumar',
-      date: todayStr,
-      uploadedDate: todayStr,
-      status: 'Ready',
-      specimen: specimen || 'Clinical Sample',
-      shortPreview: `Digitized report uploaded from ${file.name}. Ready for patient view and doctor consultation.`,
-      detailedFindings: `Laboratory document "${file.name}" (${(file.size / 1024).toFixed(1)} KB) successfully uploaded and parsed into structured electronic record.`,
-      parameters: [
-        {
-          name: 'Specimen Quality Indicator',
-          value: 'Adequate',
-          unit: 'index',
-          referenceRange: 'Adequate',
-          flag: 'Normal',
-          easyMeaning: 'The condition of the sample collected for testing.',
-          whatItMeans: 'The test sample meets diagnostic testing standards.',
-        },
-      ],
-      terms: ['Hypertension'],
-      aiExplanation: {
-        originalFinding: `Uploaded document: ${file.name}`,
-        simpleExplanation: 'Your medical report has been uploaded to your personal records.',
-        whatThisMeans: 'Your assigned doctor can access and review this report during your next consultation.',
-        importantNote: 'Example explanation for frontend demonstration.',
-      },
-      timeline: [
-        { date: '25 Sep 2026', time: 'Just now', event: 'Report Uploaded', note: `File "${file.name}" uploaded successfully.` },
-        { date: '25 Sep 2026', time: 'Just now', event: 'Parsed & Ready', note: 'Structured electronic record generated.' },
-      ],
-      historicalValues: [],
-      doctorNotes: 'Pending clinical review.',
+  async analyzeReport({ file, fileData, fileName, fileType, patientName, reportName, reportType, hospital, doctor, rawText }) {
+    let payload = {
+      patient_name: patientName,
+      report_name: reportName,
+      report_type: reportType || 'Blood Tests',
+      hospital: hospital || 'Diagnostic Laboratory',
+      doctor: doctor || 'Attending Physician',
+      raw_text: rawText || ''
     };
 
-    inMemoryReports.unshift(newReport);
-    try {
-      const saved = getSavedLocalReports();
-      saved.unshift(newReport);
-      localStorage.setItem('mediverse_custom_reports', JSON.stringify(saved));
-      // Send to serverless API connected to Neon PostgreSQL
-      await api.post('/reports/upload', {
-        report_name: newReport.reportName,
-        report_type: newReport.reportType,
-        hospital: newReport.hospital,
-        doctor: newReport.doctor,
-        parameters: newReport.parameters,
-        structured_data: { findings: newReport.detailedFindings },
-        ai_explanation: newReport.aiExplanation,
+    if (file) {
+      payload.file_name = file.name;
+      payload.file_type = file.type || 'application/pdf';
+      payload.file_size = file.size;
+
+      // Convert file to base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
       });
-    } catch (e) {
-      console.warn('Report stored locally; backend sync note:', e.message);
+      payload.file_data = base64;
+    } else if (fileData) {
+      payload.file_data = fileData;
+      payload.file_name = fileName || 'document.pdf';
+      payload.file_type = fileType || 'application/pdf';
     }
-    return newReport;
+
+    const res = await api.post('/reports/analyze', payload);
+    return {
+      success: true,
+      reportId: res.data.report_id,
+      report: normalizeDbReport(res.data.report),
+      ragAnalysis: res.data.rag_analysis
+    };
   },
 
   /**
-   * GET /api/reports/{id}/explanation
+   * DELETE /api/reports/:id
+   */
+  async deleteReport(id) {
+    const res = await api.delete(`/reports/${id}`);
+    return res.data;
+  },
+
+  /**
+   * GET /api/reports/:id/explanation
    */
   async getReportExplanation(id, lang = 'en') {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const report = inMemoryReports.find((r) => r.id === id);
+    const report = await this.getReportById(id);
     if (!report) return null;
 
     return {
@@ -171,24 +170,21 @@ export const reportService = {
       reportName: report.reportName,
       language: lang,
       explanation: report.aiExplanation,
-      disclaimer: 'AI-assisted explanation — not a diagnosis. Discuss medical decisions with your healthcare professional. Sample data for frontend demonstration.',
+      ragCitations: report.rag_citations,
+      disclaimer: 'Clinical decision support: derived from authoritative medical literature. Not a substitute for professional evaluation.'
     };
   },
 
   /**
-   * GET /api/reports/{id}/comparison
+   * Longitudinal comparison between two reports
    */
   async compareReports(id1, id2) {
-    await new Promise((resolve) => setTimeout(resolve, 60));
-    const rep1 = inMemoryReports.find((r) => r.id === id1);
-    const rep2 = inMemoryReports.find((r) => r.id === id2);
-
+    const [rep1, rep2] = await Promise.all([this.getReportById(id1), this.getReportById(id2)]);
     if (!rep1 || !rep2) return null;
 
-    // Match parameters by name
-    const comparisonRows = [];
     const rep1Params = rep1.parameters || [];
     const rep2Params = rep2.parameters || [];
+    const comparisonRows = [];
 
     rep2Params.forEach((p2) => {
       const p1 = rep1Params.find((p) => p.name.toLowerCase() === p2.name.toLowerCase());
@@ -200,52 +196,17 @@ export const reportService = {
         latestDate: rep2.date,
         latestValue: p2.value,
         referenceRange: p2.referenceRange,
-        note: 'Change shown for reference.',
+        trend: !p1 ? 'new' : Number(p2.value) > Number(p1.value) ? 'up' : Number(p2.value) < Number(p1.value) ? 'down' : 'stable',
+        status: p2.flag
       });
     });
 
     return {
       report1: rep1,
       report2: rep2,
-      rows: comparisonRows,
-      disclaimer: 'Change shown for reference. Clinical interpretation requires professional review.',
+      comparison: comparisonRows
     };
-  },
-
-  /**
-   * POST /api/reports/{id}/notes
-   * Doctor adds a clinical note
-   */
-  async addDoctorNote(id, note) {
-    const report = inMemoryReports.find((r) => r.id === id);
-    if (report) {
-      report.doctorNotes = note;
-    }
-    return report;
-  },
-
-  /**
-   * PATCH /api/reports/{id}/review
-   * Doctor marks report as reviewed
-   */
-  async markReportReviewed(id, doctorName = 'Dr. Ananya Sen') {
-    const report = inMemoryReports.find((r) => r.id === id);
-    if (report) {
-      report.status = 'Doctor Reviewed';
-      report.timeline.push({
-        date: '25 Sep 2026',
-        time: 'Just now',
-        event: 'Doctor Reviewed',
-        note: `Reviewed and verified by ${doctorName}.`,
-      });
-    }
-    return report;
-  },
-
-  /**
-   * Medical glossary lookup
-   */
-  getGlossary() {
-    return MEDICAL_GLOSSARY;
-  },
+  }
 };
+
+export default reportService;
