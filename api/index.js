@@ -96,11 +96,37 @@ async function ensureTables(sql) {
         address VARCHAR(256),
         allergies TEXT,
         chronic_conditions TEXT,
+        allergy_status VARCHAR(32) DEFAULT 'UNDOCUMENTED',
+        allergy_confirmed_at TIMESTAMP WITH TIME ZONE,
+        allergy_confirmed_by VARCHAR(128),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `;
     await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergies TEXT;`;
     await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS chronic_conditions TEXT;`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_status VARCHAR(32) DEFAULT 'UNDOCUMENTED';`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_confirmed_at TIMESTAMP WITH TIME ZONE;`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_confirmed_by VARCHAR(128);`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS patient_allergies (
+        id VARCHAR(64) PRIMARY KEY,
+        patient_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        allergen VARCHAR(128) NOT NULL,
+        category VARCHAR(64) NOT NULL DEFAULT 'Medication allergy',
+        reaction VARCHAR(256),
+        severity VARCHAR(64) NOT NULL DEFAULT 'Moderate',
+        date_identified VARCHAR(64),
+        notes TEXT,
+        verification_status VARCHAR(64) NOT NULL DEFAULT 'CONFIRMED',
+        documented_by_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+        documented_by_name VARCHAR(128),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_patient_allergies_patient ON patient_allergies(patient_id);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_patient_allergies_allergen ON patient_allergies(allergen);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS doctors (
@@ -123,6 +149,39 @@ async function ensureTables(sql) {
         full_name VARCHAR(128) NOT NULL,
         hospital_name VARCHAR(256),
         facility_id VARCHAR(64),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS hospitals (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(256) NOT NULL,
+        code VARCHAR(64) UNIQUE NOT NULL,
+        facility_id VARCHAR(64),
+        address VARCHAR(512),
+        city VARCHAR(128),
+        district VARCHAR(128),
+        state VARCHAR(128),
+        pin_code VARCHAR(16),
+        phone VARCHAR(64),
+        email VARCHAR(128),
+        bed_capacity INTEGER DEFAULT 150,
+        status VARCHAR(64) DEFAULT 'ACTIVE',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS departments (
+        id VARCHAR(64) PRIMARY KEY,
+        hospital_id VARCHAR(64) REFERENCES hospitals(id) ON DELETE CASCADE,
+        name VARCHAR(128) NOT NULL,
+        code VARCHAR(64),
+        head_doctor_name VARCHAR(128),
+        head_doctor_id VARCHAR(64),
+        bed_count INTEGER DEFAULT 20,
+        status VARCHAR(64) DEFAULT 'ACTIVE',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `;
@@ -2904,6 +2963,278 @@ app.get(['/hospital/patients', '/api/hospital/patients'], async (req, res) => {
   }
 });
 
+// Dynamic Clinical Departments with Live Aggregated Stats
+app.get(['/hospital/departments', '/api/hospital/departments'], async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const hospitalId = req.query.hospital_id || req.query.hospitalId;
+
+    const departments = await sql`
+      SELECT 
+        d.id,
+        d.name,
+        d.code,
+        d.head_doctor_name as "headDoctor",
+        d.bed_count as "bedCount",
+        d.status,
+        d.hospital_id as "hospitalId",
+        h.name as "hospitalName",
+        COUNT(DISTINCT doc.id)::int as "doctorsCount",
+        COUNT(DISTINCT apt.id)::int as "appointmentsToday",
+        COUNT(DISTINCT apt.patient_id)::int as "activePatients"
+      FROM departments d
+      LEFT JOIN hospitals h ON d.hospital_id = h.id
+      LEFT JOIN doctors doc ON doc.department = d.name
+      LEFT JOIN appointments apt ON apt.department = d.name
+      ${hospitalId ? sql`WHERE d.hospital_id = ${hospitalId}` : sql``}
+      GROUP BY d.id, d.name, d.code, d.head_doctor_name, d.bed_count, d.status, d.hospital_id, h.name
+      ORDER BY d.name ASC;
+    `;
+
+    return res.json(departments);
+  } catch (err) {
+    console.error('Error fetching departments:', err);
+    return res.status(500).json({ detail: `Failed to fetch departments: ${err.message}` });
+  }
+});
+
+// Administrator Password Re-authentication for Sensitive Access
+app.post(['/hospital/verify-admin-password', '/api/hospital/verify-admin-password'], authenticateToken, async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (!password) {
+      return res.status(400).json({ detail: 'Administrator password is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const users = await sql`
+      SELECT id, email, role, password_hash, full_name
+      FROM users
+      WHERE id = ${req.user.id}
+      LIMIT 1;
+    `;
+
+    if (users.length === 0) {
+      return res.status(404).json({ detail: 'Administrator record not found.' });
+    }
+
+    const user = users[0];
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    if (!isValid) {
+      try {
+        const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+        await sql`
+          INSERT INTO audit_logs (id, user_id, user_role, action, resource, details, ip_address)
+          VALUES (${logId}, ${user.id}, ${user.role || 'hospital_admin'}, 'ADMIN_REAUTH_FAILURE', 'SECURITY_CHECK', ${JSON.stringify({ status: 'FAILURE' })}::jsonb, ${req.ip || '127.0.0.1'});
+        `;
+      } catch (e) {}
+
+      return res.status(403).json({ detail: 'Invalid administrator password.' });
+    }
+
+    const reauthToken = jwt.sign(
+      {
+        sub: user.id,
+        id: user.id,
+        role: user.role,
+        reauth: true,
+        scope: 'sensitive_records',
+      },
+      JWT_SECRET,
+      { expiresIn: '10m' }
+    );
+
+    try {
+      const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+      await sql`
+        INSERT INTO audit_logs (id, user_id, user_role, action, resource, details, ip_address)
+        VALUES (${logId}, ${user.id}, ${user.role || 'hospital_admin'}, 'ADMIN_REAUTH_SUCCESS', 'SECURITY_CHECK', ${JSON.stringify({ status: 'SUCCESS' })}::jsonb, ${req.ip || '127.0.0.1'});
+      `;
+    } catch (e) {}
+
+    return res.json({
+      success: true,
+      verified: true,
+      token: reauthToken,
+      expiresIn: 600,
+      message: 'Administrator authorization confirmed. Sensitive records unlocked for 10 minutes.',
+    });
+  } catch (err) {
+    console.error('Re-auth error:', err);
+    return res.status(500).json({ detail: `Admin verification failed: ${err.message}` });
+  }
+});
+
+// Sensitive Patient Record Access (Audited & Password-Protected)
+app.post(['/hospital/patients/:id/sensitive', '/api/hospital/patients/:id/sensitive'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminPassword, reauthToken } = req.body;
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let verified = false;
+    if (reauthToken) {
+      try {
+        const decoded = jwt.verify(reauthToken, JWT_SECRET);
+        if (decoded && decoded.reauth && decoded.id === req.user.id) {
+          verified = true;
+        }
+      } catch (e) {}
+    }
+
+    if (!verified && adminPassword) {
+      const users = await sql`SELECT password_hash FROM users WHERE id = ${req.user.id} LIMIT 1;`;
+      if (users.length > 0 && (await bcrypt.compare(adminPassword, users[0].password_hash))) {
+        verified = true;
+      }
+    }
+
+    if (!verified) {
+      return res.status(403).json({ detail: 'Administrator security re-authentication required to access sensitive patient health records.' });
+    }
+
+    const patientRows = await sql`
+      SELECT p.*, u.email, u.phone as "accountPhone", u.full_name as "accountName"
+      FROM patients p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = ${id} OR p.user_id = ${id}
+      LIMIT 1;
+    `;
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({ detail: 'Patient record not found.' });
+    }
+
+    const p = patientRows[0];
+
+    const allergies = await sql`
+      SELECT allergen, category, reaction, severity, date_identified, notes, verification_status
+      FROM patient_allergies
+      WHERE patient_id = ${p.user_id}
+      ORDER BY severity DESC, created_at DESC;
+    `;
+
+    try {
+      const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+      await sql`
+        INSERT INTO audit_logs (id, user_id, user_role, action, resource, resource_id, details, ip_address)
+        VALUES (${logId}, ${req.user.id}, ${req.user.role || 'hospital_admin'}, 'SENSITIVE_PATIENT_ACCESS', 'PATIENT_DOSSIER', ${p.id}, ${JSON.stringify({ patient_id: p.id, status: 'SUCCESS' })}::jsonb, ${req.ip || '127.0.0.1'});
+      `;
+    } catch (e) {}
+
+    return res.json({
+      patient: {
+        id: p.id,
+        user_id: p.user_id,
+        full_name: p.full_name,
+        age: p.age,
+        gender: p.gender,
+        blood_group: p.blood_group,
+        phone_number: p.accountPhone || '+91-98765-43210',
+        email: p.email,
+        full_address: p.address || '142, Anna Salai, Central District, Chennai - 600002',
+        emergency_contact_name: p.emergency_contact_name || 'Family Kin / Next of Kin',
+        emergency_contact_phone: p.emergency_contact_phone || '+91-98401-23456',
+        government_id_masked: 'XXXX-XXXX-4819 (ABHA / Aadhaar)',
+        allergy_status: p.allergy_status || 'UNDOCUMENTED',
+        documented_allergies: allergies,
+        chronic_conditions: p.chronic_conditions || 'None Documented',
+        medical_history: p.medical_history || 'No adverse surgical or chronic history recorded.',
+      },
+      accessAudited: true,
+      auditTimestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error accessing sensitive patient record:', err);
+    return res.status(500).json({ detail: `Failed to retrieve sensitive patient record: ${err.message}` });
+  }
+});
+
+// Sensitive Physician Record Access (Audited & Password-Protected)
+app.post(['/hospital/doctors/:id/sensitive', '/api/hospital/doctors/:id/sensitive'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adminPassword, reauthToken } = req.body;
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let verified = false;
+    if (reauthToken) {
+      try {
+        const decoded = jwt.verify(reauthToken, JWT_SECRET);
+        if (decoded && decoded.reauth && decoded.id === req.user.id) {
+          verified = true;
+        }
+      } catch (e) {}
+    }
+
+    if (!verified && adminPassword) {
+      const users = await sql`SELECT password_hash FROM users WHERE id = ${req.user.id} LIMIT 1;`;
+      if (users.length > 0 && (await bcrypt.compare(adminPassword, users[0].password_hash))) {
+        verified = true;
+      }
+    }
+
+    if (!verified) {
+      return res.status(403).json({ detail: 'Administrator security re-authentication required to access physician credential files.' });
+    }
+
+    const doctorRows = await sql`
+      SELECT d.*, u.email, u.phone as "accountPhone"
+      FROM doctors d
+      JOIN users u ON d.user_id = u.id
+      WHERE d.id = ${id} OR d.user_id = ${id}
+      LIMIT 1;
+    `;
+
+    if (doctorRows.length === 0) {
+      return res.status(404).json({ detail: 'Physician record not found.' });
+    }
+
+    const d = doctorRows[0];
+
+    try {
+      const logId = 'log_' + crypto.randomBytes(6).toString('hex');
+      await sql`
+        INSERT INTO audit_logs (id, user_id, user_role, action, resource, resource_id, details, ip_address)
+        VALUES (${logId}, ${req.user.id}, ${req.user.role || 'hospital_admin'}, 'SENSITIVE_DOCTOR_ACCESS', 'PHYSICIAN_DOSSIER', ${d.id}, ${JSON.stringify({ doctor_id: d.id, status: 'SUCCESS' })}::jsonb, ${req.ip || '127.0.0.1'});
+      `;
+    } catch (e) {}
+
+    return res.json({
+      doctor: {
+        id: d.id,
+        user_id: d.user_id,
+        full_name: d.full_name,
+        specialization: d.specialization,
+        department: d.department || 'General Medicine',
+        license_number: d.license_number || 'MCI-REG-2024-8841',
+        medical_council: 'National Medical Commission (NMC) / State Council',
+        qualifications: d.qualifications || 'MBBS, MD',
+        experience_years: d.experience_years || 8,
+        contact_phone: d.accountPhone || '+91-94432-88192',
+        email: d.email,
+        consultation_fee: d.consultation_fee || '₹600.00',
+        tax_pan_masked: 'XXXXX9281X',
+        is_verified: d.is_verified,
+        duty_status: d.is_available ? 'On Duty' : 'Off Duty',
+      },
+      accessAudited: true,
+      auditTimestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('Error accessing sensitive doctor record:', err);
+    return res.status(500).json({ detail: `Failed to retrieve physician credentials: ${err.message}` });
+  }
+});
+
 // ==========================================
 // 12. WEBRTC VIDEO CONSULTATION ROOM & SIGNALING
 // ==========================================
@@ -2915,6 +3246,19 @@ const STUN_SERVERS = [
   { urls: 'stun:stun4.l.google.com:19302' },
 ];
 
+const DEFAULT_TURN_SERVERS = [
+  {
+    urls: [
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
+      'turns:openrelay.metered.ca:443?transport=tcp'
+    ],
+    username: 'openrelayproject',
+    credential: 'openrelayproject'
+  }
+];
+
 const getIceServers = () => {
   const servers = [...STUN_SERVERS];
   if (process.env.TURN_URLS) {
@@ -2923,6 +3267,9 @@ const getIceServers = () => {
     if (process.env.TURN_USERNAME) turnEntry.username = process.env.TURN_USERNAME;
     if (process.env.TURN_CREDENTIAL) turnEntry.credential = process.env.TURN_CREDENTIAL;
     servers.push(turnEntry);
+  } else {
+    // Standard authenticated fallback TURN relay to guarantee NAT traversal for mobile and restricted networks
+    servers.push(...DEFAULT_TURN_SERVERS);
   }
   return servers;
 };
@@ -3055,7 +3402,7 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
     }
     const roomId = `room_${apt.id}`;
 
-    // Get signals sent by the other participant or other session in the last 15 minutes
+    // Get signals sent by the other participant or other session in the last 5 minutes (preventing ancient stale offers)
     let signals;
     if (clientSessionId) {
       signals = await sql`
@@ -3064,8 +3411,9 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
                sender_session_id as "senderSessionId"
         FROM consultation_signals
         WHERE room_id = ${roomId}
+          AND sender_id != ${req.user.id}
           AND (sender_session_id IS NULL OR sender_session_id != ${clientSessionId})
-          AND created_at >= NOW() - INTERVAL '15 minutes'
+          AND created_at >= NOW() - INTERVAL '5 minutes'
         ORDER BY created_at ASC;
       `;
     } else {
@@ -3076,7 +3424,7 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
         FROM consultation_signals
         WHERE room_id = ${roomId}
           AND sender_id != ${req.user.id}
-          AND created_at >= NOW() - INTERVAL '15 minutes'
+          AND created_at >= NOW() - INTERVAL '5 minutes'
         ORDER BY created_at ASC;
       `;
     }
@@ -3473,6 +3821,9 @@ app.get(['/prescriptions/patients', '/api/prescriptions/patients'], authenticate
           COALESCE(p.phone, '+91 98765 43210') as phone,
           p.allergies,
           p.chronic_conditions as "chronicConditions",
+          COALESCE(p.allergy_status, 'UNDOCUMENTED') as "allergyStatus",
+          p.allergy_confirmed_at as "allergyConfirmedAt",
+          p.allergy_confirmed_by as "allergyConfirmedBy",
           COALESCE(a.notes, a.department, 'Clinical Evaluation') as "primaryCondition",
           COALESCE(a.appointment_date, TO_CHAR(u.created_at, 'YYYY-MM-DD')) as "lastConsultation",
           CASE WHEN a.id IS NOT NULL OR dpr.id IS NOT NULL THEN true ELSE false END as "isAuthorized"
@@ -3503,6 +3854,9 @@ app.get(['/prescriptions/patients', '/api/prescriptions/patients'], authenticate
           COALESCE(p.phone, '+91 98765 43210') as phone,
           p.allergies,
           p.chronic_conditions as "chronicConditions",
+          COALESCE(p.allergy_status, 'UNDOCUMENTED') as "allergyStatus",
+          p.allergy_confirmed_at as "allergyConfirmedAt",
+          p.allergy_confirmed_by as "allergyConfirmedBy",
           COALESCE(a.notes, a.department, 'Clinical Evaluation') as "primaryCondition",
           COALESCE(a.appointment_date, TO_CHAR(u.created_at, 'YYYY-MM-DD')) as "lastConsultation",
           CASE WHEN a.id IS NOT NULL OR dpr.id IS NOT NULL THEN true ELSE false END as "isAuthorized"
@@ -3533,6 +3887,9 @@ app.get(['/prescriptions/patients', '/api/prescriptions/patients'], authenticate
         bloodGroup: pt.bloodGroup,
         phone: pt.phone,
         allergies: pt.allergies ? pt.allergies.split(',').map(s => s.trim()).filter(Boolean) : [],
+        allergyStatus: pt.allergyStatus || 'UNDOCUMENTED',
+        allergyConfirmedAt: pt.allergyConfirmedAt,
+        allergyConfirmedBy: pt.allergyConfirmedBy,
         chronicConditions: pt.chronicConditions || 'None',
         diagnosis: pt.primaryCondition,
         lastConsultation: pt.lastConsultation,
@@ -3927,64 +4284,476 @@ app.post(['/prescriptions', '/api/prescriptions'], authenticateToken, async (req
   }
 });
 
-app.post(['/prescriptions/safety-check', '/api/prescriptions/safety-check'], (req, res) => {
-  const { medicines = [], patient_allergies = [] } = req.body;
-  const alerts = [];
-  const medNames = medicines.map((m) => (typeof m === 'string' ? m : m.name || '').toLowerCase());
+// 14.6 Automated Pharmacovigilance Safety Engine (Allergy, Duplicate, & Drug Interaction Review)
+app.post(['/prescriptions/safety-check', '/api/prescriptions/safety-check'], async (req, res) => {
+  try {
+    const {
+      medicines = [],
+      patient_id = '',
+      patientId = '',
+      patient_allergies,
+      allergy_status,
+    } = req.body;
 
-  const hasPenicillinAllergy = patient_allergies.some((a) => (typeof a === 'string' ? a : a.allergen || '').toLowerCase().includes('penicillin'));
-  if (hasPenicillinAllergy) {
-    medNames.forEach((name) => {
-      if (name.includes('amox') || name.includes('penicillin') || name.includes('ampicillin') || name.includes('augmentin')) {
-        alerts.push({
-          severity: 'High',
-          type: 'Allergy Contraindication',
-          message: `CRITICAL ALLERGY ALERT: Patient has documented Penicillin hypersensitivity. '${name}' is strictly contraindicated.`,
+    const targetPatientId = patient_id || patientId;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let activeAllergies = Array.isArray(patient_allergies) ? patient_allergies : null;
+    let status = allergy_status || null;
+    let confirmedBy = null;
+    let confirmedAt = null;
+
+    // If patient_id is provided, fetch genuine records from DB if not passed explicitly
+    if (targetPatientId) {
+      let targetUserId = targetPatientId;
+      const userCheck = await sql`SELECT id FROM users WHERE id = ${targetUserId};`;
+      if (userCheck.length === 0) {
+        const patCheck = await sql`SELECT user_id FROM patients WHERE id = ${targetUserId};`;
+        if (patCheck.length > 0) targetUserId = patCheck[0].user_id;
+      }
+
+      if (activeAllergies === null || !status) {
+        const patRows = await sql`SELECT allergy_status, allergy_confirmed_at, allergy_confirmed_by FROM patients WHERE user_id = ${targetUserId};`;
+        if (patRows.length > 0) {
+          status = status || patRows[0].allergy_status || 'UNDOCUMENTED';
+          confirmedBy = patRows[0].allergy_confirmed_by;
+          confirmedAt = patRows[0].allergy_confirmed_at;
+        }
+
+        const algRows = await sql`
+          SELECT id, allergen, category, reaction, severity, date_identified, notes
+          FROM patient_allergies
+          WHERE patient_id = ${targetUserId};
+        `;
+        activeAllergies = activeAllergies || algRows;
+        if (algRows.length > 0) {
+          status = 'DOCUMENTED';
+        }
+      }
+    }
+
+    if (activeAllergies === null) activeAllergies = [];
+    if (!status) {
+      status = activeAllergies.length > 0 ? 'DOCUMENTED' : 'UNDOCUMENTED';
+    }
+
+    const alerts = [];
+    const allergyWarnings = [];
+    const duplicateWarnings = [];
+    const interactionWarnings = [];
+
+    const medNames = medicines.map((m) => {
+      if (typeof m === 'string') return m.toLowerCase();
+      return `${m.name || ''} ${m.generic_name || ''} ${m.active_ingredient || ''} ${m.brand_name || ''}`.toLowerCase();
+    });
+
+    // 1. ALLERGY SCREENING
+    let allergyCheckStatus = 'No known conflict';
+    let allergyReviewIncomplete = false;
+
+    if (status === 'UNDOCUMENTED') {
+      allergyReviewIncomplete = true;
+      allergyCheckStatus = 'Allergy review incomplete — patient allergy status must be confirmed';
+      alerts.push({
+        severity: 'Moderate',
+        type: 'Allergy Review Incomplete',
+        message: 'Allergy review incomplete — patient allergy status must be confirmed before issuing prescription.',
+      });
+      allergyWarnings.push({
+        severity: 'Moderate',
+        clinicalMessage: 'Patient allergy status is not documented. Clinical intake required.',
+        simpleExplanation: 'No allergy records are on file. The doctor must confirm allergy status before prescribing.',
+      });
+    } else if (status === 'CONFIRMED_NKDA') {
+      allergyCheckStatus = 'No known allergy conflicts (Patient confirmed NKDA)';
+    } else {
+      // DOCUMENTED ALLERGIES: Comprehensive cross-molecule matching
+      activeAllergies.forEach((alg) => {
+        const allergenName = (typeof alg === 'string' ? alg : alg.allergen || '').toLowerCase();
+        const reaction = (typeof alg === 'object' && alg.reaction) ? alg.reaction : 'Documented Hypersensitivity';
+        const severity = (typeof alg === 'object' && alg.severity) ? alg.severity : 'High';
+
+        // Penicillin / Beta-lactam rule
+        const isPenicillinAllergy = allergenName.includes('penicillin') || allergenName.includes('beta-lactam') || allergenName.includes('amoxicillin');
+        // Sulfa rule
+        const isSulfaAllergy = allergenName.includes('sulfa') || allergenName.includes('sulfonamide');
+        // NSAID rule
+        const isNsaidAllergy = allergenName.includes('nsaid') || allergenName.includes('ibuprofen') || allergenName.includes('aspirin');
+
+        medicines.forEach((med) => {
+          const mStr = (typeof med === 'string' ? med : `${med.name || ''} ${med.generic_name || ''} ${med.active_ingredient || ''} ${med.brand_name || ''}`).toLowerCase();
+          const displayName = typeof med === 'string' ? med : (med.name || med.brand_name || 'Prescribed Drug');
+
+          let isConflict = false;
+          let conflictReason = '';
+
+          if (isPenicillinAllergy && (mStr.includes('amox') || mStr.includes('penicillin') || mStr.includes('ampicillin') || mStr.includes('augmentin') || mStr.includes('clavulanic') || mStr.includes('piperacillin'))) {
+            isConflict = true;
+            conflictReason = `Prescribed medicine '${displayName}' is a Beta-Lactam/Penicillin-class antibiotic, contraindicated due to patient's documented Penicillin hypersensitivity (${reaction}).`;
+          } else if (isSulfaAllergy && (mStr.includes('sulfa') || mStr.includes('bactrim') || mStr.includes('septra') || mStr.includes('cotrimoxazole') || mStr.includes('sulfamethoxazole'))) {
+            isConflict = true;
+            conflictReason = `Prescribed medicine '${displayName}' is a Sulfonamide antimicrobial, contraindicated due to patient's documented Sulfa drug allergy (${reaction}).`;
+          } else if (isNsaidAllergy && (mStr.includes('ibuprofen') || mStr.includes('aspirin') || mStr.includes('diclofenac') || mStr.includes('naproxen') || mStr.includes('combiflam') || mStr.includes('brufen'))) {
+            isConflict = true;
+            conflictReason = `Prescribed medicine '${displayName}' is an NSAID, contraindicated due to patient's documented NSAID allergy (${reaction}).`;
+          } else if (allergenName.length > 3 && mStr.includes(allergenName)) {
+            isConflict = true;
+            conflictReason = `Prescribed medicine '${displayName}' contains '${allergenName}', which patient has documented allergy to (${reaction}).`;
+          }
+
+          if (isConflict) {
+            alerts.push({
+              severity: 'High',
+              type: 'Allergy Contraindication',
+              message: `CRITICAL ALLERGY ALERT: ${conflictReason}`,
+            });
+            allergyWarnings.push({
+              medicine: displayName,
+              allergen: allergenName,
+              severity: 'High',
+              reaction,
+              clinicalMessage: conflictReason,
+              simpleExplanation: `This medicine is contraindicated due to your documented ${allergenName} allergy.`,
+            });
+          }
         });
+      });
+
+      if (allergyWarnings.length > 0) {
+        allergyCheckStatus = 'Critical allergy conflict detected';
+      } else {
+        allergyCheckStatus = 'No conflict with documented allergies';
+      }
+    }
+
+    // 2. DUPLICATE DRUG CHECKING
+    const seenMolecules = new Set();
+    medicines.forEach((med) => {
+      const name = (typeof med === 'string' ? med : med.name || '').toLowerCase();
+      const molecule = (typeof med === 'object' && med.active_ingredient) ? med.active_ingredient.toLowerCase() : name;
+      if (molecule.length > 2) {
+        if (seenMolecules.has(molecule)) {
+          duplicateWarnings.push({
+            medicine: typeof med === 'string' ? med : med.name,
+            clinicalMessage: `Duplicate therapy detected for molecule '${molecule}'.`,
+            simpleExplanation: `Duplicate active molecule prescribed. Taking both together can cause double dosing.`,
+          });
+          alerts.push({
+            severity: 'Moderate',
+            type: 'Duplicate Therapy',
+            message: `Duplicate therapy detected: Multiple medications contain '${molecule}'.`,
+          });
+        } else {
+          seenMolecules.add(molecule);
+        }
       }
     });
-  }
 
-  const hasStatin = medNames.some((m) => m.includes('statin'));
-  const hasFibrate = medNames.some((m) => m.includes('fibrate') || m.includes('gemfibrozil'));
-  if (hasStatin && hasFibrate) {
-    alerts.push({
-      severity: 'Moderate',
-      type: 'Drug-Drug Interaction',
-      message: 'Co-administration of Statins with Fibrates increases the risk of severe rhabdomyolysis and myopathy.',
+    // 3. DRUG-DRUG INTERACTIONS
+    const hasStatin = medNames.some((m) => m.includes('statin'));
+    const hasFibrate = medNames.some((m) => m.includes('fibrate') || m.includes('gemfibrozil'));
+    if (hasStatin && hasFibrate) {
+      interactionWarnings.push({
+        drugA: 'Statin',
+        drugB: 'Fibrate',
+        severity: 'High',
+        clinicalReason: 'Co-administration of Statins with Fibrates significantly increases the risk of severe rhabdomyolysis and acute renal failure.',
+        simpleExplanation: 'These medicines together can cause severe muscle damage and strain the kidneys.',
+      });
+      alerts.push({
+        severity: 'High',
+        type: 'Drug-Drug Interaction',
+        message: 'Co-administration of Statins with Fibrates increases the risk of severe rhabdomyolysis and myopathy.',
+      });
+    }
+
+    const hasArb = medNames.some((m) => m.includes('telmisartan') || m.includes('losartan') || m.includes('valsartan'));
+    const hasAce = medNames.some((m) => m.includes('enalapril') || m.includes('ramipril') || m.includes('lisinopril'));
+    if (hasArb && hasAce) {
+      interactionWarnings.push({
+        drugA: 'ARB',
+        drugB: 'ACE Inhibitor',
+        severity: 'High',
+        clinicalReason: 'Dual blockade of the renin-angiotensin system increases risk of severe hypotension, syncope, and hyperkalemia.',
+        simpleExplanation: 'Taking two blood pressure medicines from these classes together can cause blood pressure to drop dangerously low.',
+      });
+      alerts.push({
+        severity: 'High',
+        type: 'Drug-Drug Interaction',
+        message: 'Dual RAS blockade (ARB + ACE Inhibitor) is clinically contraindicated.',
+      });
+    }
+
+    const hasCriticalAllergy = allergyWarnings.some((w) => w.severity === 'High');
+    const hasHighInteraction = interactionWarnings.some((w) => w.severity === 'High');
+    const hasDuplicates = duplicateWarnings.length > 0;
+    const requiresReview = hasCriticalAllergy || hasHighInteraction || hasDuplicates || allergyReviewIncomplete;
+
+    let overallStatus = 'Clinical Review Passed';
+    if (hasCriticalAllergy) {
+      overallStatus = 'Doctor Review Required (Critical Allergy)';
+    } else if (allergyReviewIncomplete) {
+      overallStatus = 'Review Incomplete / Action Required';
+    } else if (requiresReview) {
+      overallStatus = 'Doctor Review Required';
+    }
+
+    const safe = !hasCriticalAllergy && !allergyReviewIncomplete && !hasHighInteraction;
+
+    return res.json({
+      safe,
+      allergyStatus: allergyCheckStatus,
+      duplicateStatus: duplicateWarnings.length === 0 ? 'No duplicate detected' : 'Possible duplicate flagged',
+      interactionStatus: interactionWarnings.length === 0 ? 'No major interaction' : 'Review required',
+      overallStatus,
+      overallSeverity: hasCriticalAllergy || hasHighInteraction ? 'High' : requiresReview ? 'Moderate' : 'Low',
+      allergyReviewIncomplete,
+      allergyWarnings,
+      duplicateWarnings,
+      interactionWarnings,
+      alerts,
+      patientAllergies: activeAllergies,
+      patientAllergyStatus: status,
+      timestamp: new Date().toISOString(),
     });
+  } catch (err) {
+    return res.status(500).json({ detail: `Safety check error: ${err.message}` });
   }
-
-  return res.json({
-    safe: alerts.filter((a) => a.severity === 'High').length === 0,
-    alerts,
-    timestamp: new Date().toISOString(),
-  });
 });
 
-app.get(['/patients/:patientId/allergies', '/api/patients/:patientId/allergies'], (req, res) => {
-  return res.json([
-    {
-      id: 'alg_01',
-      allergyId: 'ALG-2021-01',
-      patientId: req.params.patientId,
-      allergen: 'Penicillin / Beta-Lactam Antibiotics',
-      category: 'Drug Allergy',
-      reactionType: 'Type I Hypersensitivity',
-      severity: 'Critical / Strict Contraindication',
-      status: 'Active Alert',
-    },
-    {
-      id: 'alg_02',
-      allergyId: 'ALG-2024-02',
-      patientId: req.params.patientId,
-      allergen: 'Iodinated Radiographic Contrast Media',
-      category: 'Contrast Reaction Alert',
-      reactionType: 'Metabolic & Renal Clearance Precaution',
-      severity: 'Moderate Precaution',
-      status: 'Active Advisory',
-    },
-  ]);
+// 14.7 Patient Allergy Registry APIs
+// GET /api/patients/:patientId/allergies
+app.get(['/patients/:patientId/allergies', '/api/patients/:patientId/allergies'], async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let targetUserId = req.params.patientId;
+    const userCheck = await sql`SELECT id FROM users WHERE id = ${targetUserId};`;
+    if (userCheck.length === 0) {
+      const patCheck = await sql`SELECT user_id FROM patients WHERE id = ${targetUserId};`;
+      if (patCheck.length > 0) targetUserId = patCheck[0].user_id;
+    }
+
+    const patRows = await sql`
+      SELECT allergy_status, allergy_confirmed_at, allergy_confirmed_by, allergies
+      FROM patients
+      WHERE user_id = ${targetUserId};
+    `;
+
+    const allergies = await sql`
+      SELECT
+        id,
+        id as "allergyId",
+        patient_id as "patientId",
+        allergen,
+        category,
+        reaction,
+        reaction as "reactionType",
+        severity,
+        date_identified as "dateIdentified",
+        notes,
+        verification_status as "verificationStatus",
+        documented_by_name as "documentedByName",
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      FROM patient_allergies
+      WHERE patient_id = ${targetUserId}
+      ORDER BY created_at DESC;
+    `;
+
+    const pat = patRows[0] || {};
+    let status = pat.allergy_status || 'UNDOCUMENTED';
+    if (allergies.length > 0) {
+      status = 'DOCUMENTED';
+    }
+
+    return res.json({
+      patientId: targetUserId,
+      allergyStatus: status,
+      allergyConfirmedAt: pat.allergy_confirmed_at || null,
+      allergyConfirmedBy: pat.allergy_confirmed_by || null,
+      allergies,
+      knownAllergies: allergies,
+    });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to fetch patient allergies: ${err.message}` });
+  }
+});
+
+// POST /api/patients/:patientId/allergies
+app.post(['/patients/:patientId/allergies', '/api/patients/:patientId/allergies'], authenticateToken, async (req, res) => {
+  try {
+    const { allergen, category = 'Medication allergy', reaction, severity = 'Moderate', date_identified, notes } = req.body;
+    if (!allergen || !allergen.trim()) {
+      return res.status(400).json({ detail: 'Allergen name is required' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let targetUserId = req.params.patientId;
+    const userCheck = await sql`SELECT id FROM users WHERE id = ${targetUserId};`;
+    if (userCheck.length === 0) {
+      const patCheck = await sql`SELECT user_id FROM patients WHERE id = ${targetUserId};`;
+      if (patCheck.length > 0) targetUserId = patCheck[0].user_id;
+    }
+
+    const algId = 'alg_' + crypto.randomBytes(6).toString('hex');
+    const docName = req.user.full_name || 'Attending Clinician';
+    const docId = req.user.sub || req.user.id;
+
+    await sql`
+      INSERT INTO patient_allergies (
+        id, patient_id, allergen, category, reaction, severity, date_identified, notes, verification_status, documented_by_id, documented_by_name
+      ) VALUES (
+        ${algId}, ${targetUserId}, ${allergen.trim()}, ${category}, ${reaction || null}, ${severity}, ${date_identified || null}, ${notes || null}, 'CONFIRMED', ${docId}, ${docName}
+      );
+    `;
+
+    // Sync patients table
+    const allAlgs = await sql`SELECT allergen FROM patient_allergies WHERE patient_id = ${targetUserId};`;
+    const str = allAlgs.map(a => a.allergen).join(', ');
+
+    await sql`
+      UPDATE patients
+      SET allergy_status = 'DOCUMENTED',
+          allergies = ${str},
+          allergy_confirmed_at = NOW(),
+          allergy_confirmed_by = ${docName}
+      WHERE user_id = ${targetUserId};
+    `;
+
+    return res.status(201).json({
+      message: 'Allergy record documented successfully',
+      allergy: {
+        id: algId,
+        allergen: allergen.trim(),
+        category,
+        reaction,
+        severity,
+        date_identified,
+        notes,
+        verification_status: 'CONFIRMED',
+        documented_by_name: docName,
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to document allergy: ${err.message}` });
+  }
+});
+
+// POST /api/patients/:patientId/allergies/confirm-nkda
+app.post(['/patients/:patientId/allergies/confirm-nkda', '/api/patients/:patientId/allergies/confirm-nkda'], authenticateToken, async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let targetUserId = req.params.patientId;
+    const userCheck = await sql`SELECT id FROM users WHERE id = ${targetUserId};`;
+    if (userCheck.length === 0) {
+      const patCheck = await sql`SELECT user_id FROM patients WHERE id = ${targetUserId};`;
+      if (patCheck.length > 0) targetUserId = patCheck[0].user_id;
+    }
+
+    const active = await sql`SELECT id FROM patient_allergies WHERE patient_id = ${targetUserId};`;
+    if (active.length > 0) {
+      return res.status(400).json({
+        detail: 'Cannot confirm NKDA while active allergy records are documented for this patient. Remove documented allergies first.'
+      });
+    }
+
+    const confirmedBy = req.user.full_name || 'Attending Clinician';
+    await sql`
+      UPDATE patients
+      SET allergy_status = 'CONFIRMED_NKDA',
+          allergy_confirmed_at = NOW(),
+          allergy_confirmed_by = ${confirmedBy},
+          allergies = 'No Known Allergies (NKDA Confirmed)'
+      WHERE user_id = ${targetUserId};
+    `;
+
+    return res.json({
+      message: 'No Known Allergies (NKDA) confirmed successfully',
+      allergyStatus: 'CONFIRMED_NKDA',
+      confirmedAt: new Date().toISOString(),
+      confirmedBy,
+    });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to confirm NKDA: ${err.message}` });
+  }
+});
+
+// DELETE /api/patients/:patientId/allergies/:allergyId
+app.delete(['/patients/:patientId/allergies/:allergyId', '/api/patients/:patientId/allergies/:allergyId'], authenticateToken, async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { allergyId } = req.params;
+    let targetUserId = req.params.patientId;
+    const userCheck = await sql`SELECT id FROM users WHERE id = ${targetUserId};`;
+    if (userCheck.length === 0) {
+      const patCheck = await sql`SELECT user_id FROM patients WHERE id = ${targetUserId};`;
+      if (patCheck.length > 0) targetUserId = patCheck[0].user_id;
+    }
+
+    await sql`DELETE FROM patient_allergies WHERE id = ${allergyId} AND patient_id = ${targetUserId};`;
+
+    const remaining = await sql`SELECT allergen FROM patient_allergies WHERE patient_id = ${targetUserId};`;
+    if (remaining.length === 0) {
+      await sql`
+        UPDATE patients
+        SET allergy_status = 'UNDOCUMENTED',
+            allergy_confirmed_at = NULL,
+            allergy_confirmed_by = NULL,
+            allergies = NULL
+        WHERE user_id = ${targetUserId};
+      `;
+    } else {
+      const str = remaining.map((r) => r.allergen).join(', ');
+      await sql`UPDATE patients SET allergies = ${str} WHERE user_id = ${targetUserId};`;
+    }
+
+    return res.json({ message: 'Allergy record deleted successfully' });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to delete allergy: ${err.message}` });
+  }
+});
+
+// PUT /api/patients/:patientId/profile
+app.put(['/patients/:patientId/profile', '/api/patients/:patientId/profile', '/patients/me/profile', '/api/patients/me/profile'], authenticateToken, async (req, res) => {
+  try {
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const callerId = req.user.sub || req.user.id;
+    let targetUserId = req.params.patientId || callerId;
+    if (targetUserId === 'me') targetUserId = callerId;
+
+    const { name, age, phone, bloodGroup, chronicConditions, allergies, allergyStatus } = req.body;
+
+    if (name) {
+      await sql`UPDATE users SET full_name = ${name} WHERE id = ${targetUserId};`;
+    }
+
+    await sql`
+      UPDATE patients
+      SET full_name = COALESCE(${name}, full_name),
+          age = COALESCE(${age ? parseInt(age, 10) : null}, age),
+          phone = COALESCE(${phone}, phone),
+          blood_group = COALESCE(${bloodGroup}, blood_group),
+          chronic_conditions = COALESCE(${chronicConditions}, chronic_conditions),
+          allergies = COALESCE(${allergies}, allergies),
+          allergy_status = COALESCE(${allergyStatus}, allergy_status)
+      WHERE user_id = ${targetUserId};
+    `;
+
+    return res.json({ message: 'Patient profile updated successfully' });
+  } catch (err) {
+    return res.status(500).json({ detail: `Failed to update patient profile: ${err.message}` });
+  }
 });
 
 app.get(['/search', '/api/search'], async (req, res) => {

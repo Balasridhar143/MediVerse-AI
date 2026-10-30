@@ -50,21 +50,60 @@ export const prescriptionService = {
 
   // GET /api/patients/{id}/allergies
   async getPatientAllergies(patientId = '') {
+    if (!patientId) return { allergyStatus: 'UNDOCUMENTED', allergies: [], knownAllergies: [] };
     try {
       const response = await api.get(`/patients/${patientId}/allergies`);
-      return response.data;
+      const data = response.data;
+      if (Array.isArray(data)) {
+        return {
+          patientId,
+          allergyStatus: data.length > 0 ? 'DOCUMENTED' : 'UNDOCUMENTED',
+          allergies: data,
+          knownAllergies: data,
+        };
+      }
+      return data;
     } catch (err) {
-      return mockPatientAllergies[patientId]?.knownAllergies || [];
+      console.warn('Failed to fetch patient allergies:', err);
+      throw err;
     }
   },
 
+  // POST /api/patients/{id}/allergies
+  async addPatientAllergy(patientId, allergyData) {
+    const response = await api.post(`/patients/${patientId}/allergies`, allergyData);
+    return response.data;
+  },
+
+  // POST /api/patients/{id}/allergies/confirm-nkda
+  async confirmPatientNKDA(patientId) {
+    const response = await api.post(`/patients/${patientId}/allergies/confirm-nkda`, {});
+    return response.data;
+  },
+
+  // DELETE /api/patients/{id}/allergies/{allergyId}
+  async deletePatientAllergy(patientId, allergyId) {
+    const response = await api.delete(`/patients/${patientId}/allergies/${allergyId}`);
+    return response.data;
+  },
+
   // POST /api/prescriptions/safety-check
-  async runSafetyCheck({ medicines, patientId }) {
+  async runSafetyCheck({ medicines, patientId, patientAllergies, allergyStatus }) {
     try {
-      const response = await api.post('/prescriptions/safety-check', { medicines, patient_id: patientId });
+      const response = await api.post('/prescriptions/safety-check', {
+        medicines,
+        patient_id: patientId,
+        patient_allergies: patientAllergies,
+        allergy_status: allergyStatus,
+      });
       return response.data;
     } catch (err) {
-      return runPrescriptionSafetyCheck({ medicines, patientId });
+      return runPrescriptionSafetyCheck({
+        medicines,
+        patientId,
+        patientAllergies,
+        allergyStatus,
+      });
     }
   },
 };

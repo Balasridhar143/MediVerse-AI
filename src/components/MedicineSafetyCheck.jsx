@@ -39,15 +39,28 @@ export default function MedicineSafetyCheck({
     interactionWarnings = [],
   } = safetyResult;
 
+  const isAllergyIncomplete =
+    safetyResult.allergyReviewIncomplete ||
+    (allergyStatus && (allergyStatus.includes('incomplete') || allergyStatus.includes('must be confirmed')));
+
+  const hasCriticalAllergy =
+    allergyWarnings.some((w) => w.severity === 'High') ||
+    (allergyStatus && allergyStatus.toLowerCase().includes('critical'));
+
   const hasWarnings =
     allergyWarnings.length > 0 ||
     duplicateWarnings.length > 0 ||
-    interactionWarnings.length > 0;
+    interactionWarnings.length > 0 ||
+    isAllergyIncomplete;
 
   return (
     <div
       className={`rounded-2xl border transition-all overflow-hidden ${
-        hasWarnings
+        hasCriticalAllergy
+          ? 'bg-rose-50/70 border-rose-300'
+          : isAllergyIncomplete
+          ? 'bg-amber-50/70 border-amber-300'
+          : hasWarnings
           ? 'bg-amber-50/60 border-amber-300'
           : 'bg-emerald-50/40 border-emerald-300'
       } ${className}`}
@@ -57,10 +70,18 @@ export default function MedicineSafetyCheck({
         <div className="flex items-start gap-3">
           <div
             className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-2xs ${
-              hasWarnings ? 'bg-amber-600' : 'bg-emerald-600'
+              hasCriticalAllergy
+                ? 'bg-rose-600'
+                : isAllergyIncomplete
+                ? 'bg-amber-600'
+                : hasWarnings
+                ? 'bg-amber-600'
+                : 'bg-emerald-600'
             }`}
           >
-            {hasWarnings ? (
+            {hasCriticalAllergy ? (
+              <ShieldAlert className="w-5 h-5" />
+            ) : isAllergyIncomplete || hasWarnings ? (
               <AlertTriangle className="w-5 h-5" />
             ) : (
               <CheckCircle2 className="w-5 h-5" />
@@ -69,11 +90,15 @@ export default function MedicineSafetyCheck({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <h4 className="font-extrabold text-slate-900 text-sm">
-                Medicine Safety & Compatibility Summary
+                Medicine Safety & Pharmacovigilance Review
               </h4>
               <span
                 className={`text-[10px] font-bold px-2 py-0.5 rounded border uppercase tracking-wider ${
-                  hasWarnings
+                  hasCriticalAllergy
+                    ? 'bg-rose-100 text-rose-950 border-rose-300'
+                    : isAllergyIncomplete
+                    ? 'bg-amber-100 text-amber-950 border-amber-300'
+                    : hasWarnings
                     ? 'bg-amber-100 text-amber-950 border-amber-300'
                     : 'bg-emerald-100 text-emerald-950 border-emerald-300'
                 }`}
@@ -82,7 +107,11 @@ export default function MedicineSafetyCheck({
               </span>
             </div>
             <p className="text-slate-600 text-xs mt-0.5">
-              Verified clinical safety check against allergies, duplicates, and drug-drug interactions.
+              {isAllergyIncomplete
+                ? '⚠️ Patient allergy status is not documented. Confirmation required before dispensing.'
+                : hasCriticalAllergy
+                ? 'CRITICAL CONTRAINDICATION DETECTED: Review documented hypersensitivity.'
+                : 'Verified clinical safety check against allergies, duplicates, and drug-drug interactions.'}
             </p>
           </div>
         </div>
@@ -104,19 +133,27 @@ export default function MedicineSafetyCheck({
         {/* Allergy Check */}
         <div
           className={`p-2.5 rounded-xl border flex items-center gap-2 ${
-            allergyWarnings.length > 0
+            hasCriticalAllergy
+              ? 'bg-rose-100/80 border-rose-400 text-rose-950'
+              : isAllergyIncomplete
+              ? 'bg-amber-100/70 border-amber-400 text-amber-950'
+              : allergyWarnings.length > 0
               ? 'bg-white border-amber-300 text-amber-950'
               : 'bg-white/80 border-slate-200 text-slate-800'
           }`}
         >
-          {allergyWarnings.length > 0 ? (
+          {hasCriticalAllergy ? (
+            <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+          ) : isAllergyIncomplete ? (
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+          ) : allergyWarnings.length > 0 ? (
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
           ) : (
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           )}
           <div className="min-w-0">
             <span className="font-bold text-[11px] block uppercase text-slate-600">Allergy Check</span>
-            <span className="font-semibold truncate block">{allergyStatus}</span>
+            <span className="font-semibold text-xs leading-snug block break-words">{allergyStatus}</span>
           </div>
         </div>
 

@@ -556,7 +556,8 @@ export const prescriptionService = {
       const res = await api.get(`/patients/${patientId}/allergies`);
       return res.data;
     } catch (err) {
-      return mockPatientAllergies[patientId] || { knownAllergies: [] };
+      console.warn('Failed to load patient allergies:', err);
+      throw err;
     }
   },
 
@@ -674,6 +675,11 @@ export const hospitalDataService = {
     return res.data;
   },
 
+  async getDepartments(params = {}) {
+    const res = await api.get('/hospital/departments', { params });
+    return res.data;
+  },
+
   async getDoctors() {
     const res = await api.get('/hospital/doctors');
     return res.data;
@@ -686,6 +692,21 @@ export const hospitalDataService = {
 
   async getPatients() {
     const res = await api.get('/hospital/patients');
+    return res.data;
+  },
+
+  async verifyAdminPassword(password) {
+    const res = await api.post('/hospital/verify-admin-password', { password });
+    return res.data;
+  },
+
+  async getPatientSensitive(id, payload = {}) {
+    const res = await api.post(`/hospital/patients/${id}/sensitive`, payload);
+    return res.data;
+  },
+
+  async getDoctorSensitive(id, payload = {}) {
+    const res = await api.post(`/hospital/doctors/${id}/sensitive`, payload);
     return res.data;
   },
 };

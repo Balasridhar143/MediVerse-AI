@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-10-30T12:22:57.626Z",
+  "tables": {
+    "users": [],
+    "patients": [],
+    "doctors": [],
+    "hospital_admins": [],
+    "hospitals": [],
+    "departments": [],
+    "appointments": [],
+    "medical_reports": [],
+    "prescriptions": [],
+    "prescription_items": [],
+    "patient_allergies": [],
+    "doctor_patient_relationships": [],
+    "audit_logs": [],
+    "medical_knowledge": []
+  }
+}

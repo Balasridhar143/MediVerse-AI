@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { hospitalDataService } from '../../services/api';
-import { mockDepartments, mockEmergencyCases } from '../../data/mockData';
+import { mockEmergencyCases } from '../../data/mockData';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
@@ -28,15 +28,18 @@ export default function HospitalDashboard() {
     recent_appointments: [],
   });
   const [doctorsList, setDoctorsList] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       hospitalDataService.getDashboardData().catch(() => null),
       hospitalDataService.getDoctors().catch(() => []),
-    ]).then(([dash, docs]) => {
+      hospitalDataService.getDepartments().catch(() => []),
+    ]).then(([dash, docs, depts]) => {
       if (dash) setDashboardData(dash);
       if (docs) setDoctorsList(docs);
+      if (depts && Array.isArray(depts)) setDepartments(depts);
     }).finally(() => setLoading(false));
   }, []);
 
@@ -82,15 +85,15 @@ export default function HospitalDashboard() {
         }
       >
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {mockDepartments.map((dept) => (
+          {departments.slice(0, 6).map((dept) => (
             <div
-              key={dept.name}
-              className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 text-xs"
+              key={dept.id || dept.name}
+              className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1 text-xs hover:border-teal-300 transition-colors"
             >
-              <h4 className="font-bold text-slate-900 truncate">{dept.name}</h4>
-              <p className="text-slate-500 text-[11px]">{dept.doctorsCount} Clinicians</p>
+              <h4 className="font-bold text-slate-900 truncate" title={dept.name}>{dept.name}</h4>
+              <p className="text-slate-500 text-[11px]">{dept.doctorsCount || 0} Clinicians</p>
               <div className="pt-1 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-teal-700">{dept.appointmentsToday} Today</span>
+                <span className="font-semibold text-teal-700">{dept.appointmentsToday || 0} Bookings</span>
               </div>
             </div>
           ))}

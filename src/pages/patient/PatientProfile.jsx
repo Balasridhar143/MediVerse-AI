@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import api from '../../services/api';
+import { prescriptionService } from '../../services/prescriptionService';
 import {
   User,
   Heart,
@@ -17,6 +19,9 @@ import {
   Building,
   Activity,
   Lock,
+  Plus,
+  ShieldAlert,
+  Loader2,
 } from 'lucide-react';
 
 export default function PatientProfile() {
@@ -24,22 +29,50 @@ export default function PatientProfile() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Core patient profile fields
   const [profile, setProfile] = useState({
-    name: user?.name || 'Gokul Sankar',
-    patientId: user?.patientId || 'PID-2026-089',
+    name: user?.name || user?.full_name || 'Patient',
+    patientId: user?.patientId || user?.id || 'PID-2026-089',
     bloodGroup: user?.bloodGroup || 'B+',
-    age: user?.age || 22,
+    age: user?.age || 28,
     phone: user?.phone || '+91 98765 43210',
     email: user?.email || 'patient@example.com',
-    allergies: 'Penicillin',
-    medicalHistory: 'Available (Stage 1 Hypertension, Pre-diabetes, Appendectomy 2018)',
-    chronicConditions: 'Essential Hypertension, Mild Dyslipidemia',
-    emergencyContact: 'Pooja Sharma',
-    relationship: 'Spouse',
+    allergies: '',
+    allergyStatus: 'UNDOCUMENTED',
+    medicalHistory: 'Available in longitudinal record',
+    chronicConditions: 'None Reported',
+    emergencyContact: 'Emergency Caretaker',
+    relationship: 'Family Member',
     emergencyPhone: '+91 98765 43210',
   });
+
+  const [allergyList, setAllergyList] = useState([]);
+  const [loadingAllergies, setLoadingAllergies] = useState(true);
+
+  // Load real allergy information from backend
+  const loadPatientAllergies = async () => {
+    if (!user?.id) return;
+    setLoadingAllergies(true);
+    try {
+      const data = await prescriptionService.getPatientAllergies(user.id);
+      setAllergyList(data.allergies || []);
+      setProfile((prev) => ({
+        ...prev,
+        allergyStatus: data.allergyStatus || 'UNDOCUMENTED',
+        allergies: data.allergies?.map((a) => a.allergen).join(', ') || (data.allergyStatus === 'CONFIRMED_NKDA' ? 'No Known Allergies (NKDA Confirmed)' : ''),
+      }));
+    } catch (err) {
+      console.warn('Could not load patient allergies:', err);
+    } finally {
+      setLoadingAllergies(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPatientAllergies();
+  }, [user?.id]);
 
   const [editForm, setEditForm] = useState({ ...profile });
 
@@ -52,12 +85,43 @@ export default function PatientProfile() {
     setIsEditing(false);
   };
 
-  const handleSaveEdit = (e) => {
+  const handleSaveEdit = async (e) => {
     e.preventDefault();
-    setProfile({ ...editForm });
-    setIsEditing(false);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3500);
+    setSaving(true);
+    try {
+      // Persist profile to backend database
+      await api.put('/patients/me/profile', {
+        name: editForm.name,
+        age: editForm.age,
+        phone: editForm.phone,
+        bloodGroup: editForm.bloodGroup,
+        chronicConditions: editForm.chronicConditions,
+        allergies: editForm.allergies,
+      });
+
+      setProfile({ ...editForm });
+      setIsEditing(false);
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3500);
+      loadPatientAllergies();
+    } catch (err) {
+      console.error('Failed to save profile:', err);
+      alert('Failed to save profile updates to database.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConfirmNKDA = async () => {
+    if (!user?.id) return;
+    try {
+      await prescriptionService.confirmPatientNKDA(user.id);
+      await loadPatientAllergies();
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3500);
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to confirm NKDA status.');
+    }
   };
 
   return (
@@ -351,13 +415,81 @@ export default function PatientProfile() {
             </Card>
 
             {/* 2. MEDICAL INFORMATION */}
-            <Card title="Medical Information" icon={Heart}>
+            <Card title="Medical Information & Allergies" icon={Heart}>
               <div className="space-y-3 text-xs">
-                <div className="flex justify-between items-start py-1.5 border-b border-slate-100">
-                  <span className="text-slate-500 w-36 shrink-0">Known Allergies</span>
-                  <span className="font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 text-right">
-                    {profile.allergies}
-                  </span>
+                <div className="py-1.5 border-b border-slate-100">
+                  <span className="text-slate-500 block mb-1">Documented Allergies</span>
+                  {loadingAllergies ? (
+                    <div className="flex items-center gap-2 text-slate-500 py-1">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600" />
+                      <span>Loading allergy records...</span>
+                    </div>
+                  ) : profile.allergyStatus === 'DOCUMENTED' || allergyList.length > 0 ? (
+                    /* STATE A — Allergies documented */
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap gap-1.5">
+                        {allergyList.length > 0 ? (
+                          allergyList.map((alg, idx) => (
+                            <span
+                              key={idx}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-rose-50 border border-rose-200 text-rose-950 shadow-2xs"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                              <span>{alg.allergen}</span>
+                              <span className="text-[10px] text-rose-700 font-semibold bg-white px-1 py-0.2 rounded border border-rose-200">
+                                {alg.severity || 'Moderate'}
+                              </span>
+                              {alg.reaction && (
+                                <span className="text-[10px] text-slate-500 font-normal italic">
+                                  ({alg.reaction})
+                                </span>
+                              )}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="font-semibold text-rose-700 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
+                            {profile.allergies}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ) : profile.allergyStatus === 'CONFIRMED_NKDA' ? (
+                    /* STATE B — No known allergies confirmed */
+                    <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-900 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold block text-xs">● Confirmed No Known Allergies (NKDA)</span>
+                        <span className="text-[11px] text-emerald-700">
+                          Confirmed: No documented drug, food, or environmental allergies.
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    /* STATE C — Allergy information unavailable or undocumented */
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-amber-950 space-y-2">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold block text-xs">
+                            ⚠️ Allergy information not documented — confirmation required.
+                          </span>
+                          <span className="text-[11px] text-amber-800 block">
+                            You have not documented your allergy history. Please confirm if you have any allergies to help your doctors prescribe safely.
+                          </span>
+                        </div>
+                      </div>
+                      <div className="pt-1 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleConfirmNKDA}
+                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-[11px] shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>I Have No Known Allergies (Confirm NKDA)</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-between items-start py-1.5 border-b border-slate-100">

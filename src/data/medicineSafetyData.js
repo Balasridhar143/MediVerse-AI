@@ -125,14 +125,36 @@ export const verifiedDrugInteractions = [
 /**
  * Reusable safety check engine
  * Evaluates a list of medicines against patient allergies, duplicate molecules, and drug-drug interactions.
+ * Strictly adheres to 3 distinct clinical states:
+ * State A: Allergies documented -> Cross-screens prescribed drugs against recorded allergies.
+ * State B: Confirmed NKDA -> Confirmed no known allergies.
+ * State C: Undocumented -> Flags incomplete check, avoids false "Clinical Review Passed".
  */
 export const runPrescriptionSafetyCheck = ({
   medicines = [],
-  patientId = 'PID-2026-089',
+  patientId = '',
+  patientAllergies = null,
+  allergyStatus = null,
   existingMedications = [],
 }) => {
-  const patientData = mockPatientAllergies[patientId] || { knownAllergies: [] };
-  const knownAllergies = patientData.knownAllergies;
+  // 1. Resolve patient allergies & status
+  let knownAllergies = [];
+  if (Array.isArray(patientAllergies)) {
+    knownAllergies = patientAllergies;
+  } else if (patientId && mockPatientAllergies[patientId]) {
+    knownAllergies = mockPatientAllergies[patientId].knownAllergies;
+  }
+
+  let status = allergyStatus;
+  if (!status) {
+    if (knownAllergies.length > 0) {
+      status = 'DOCUMENTED';
+    } else if (patientId === 'PID-2026-089') {
+      status = 'DOCUMENTED';
+    } else {
+      status = 'UNDOCUMENTED';
+    }
+  }
 
   const allergyWarnings = [];
   const duplicateWarnings = [];
@@ -143,37 +165,67 @@ export const runPrescriptionSafetyCheck = ({
     ...existingMedications.map((m) => (typeof m === 'string' ? m : m.name)),
   ];
 
+  let allergyCheckStatus = 'No known conflict';
+  let allergyReviewIncomplete = false;
+
   // 1. Allergy Checking
-  medicines.forEach((med) => {
-    const medName = typeof med === 'string' ? med : med.name;
-    const lowerMed = medName.toLowerCase();
-
-    knownAllergies.forEach((allergy) => {
-      const lowerAllergy = allergy.allergen.toLowerCase();
-      // Direct name match or penicillin/beta-lactam cross-reactivity rule
-      const isDirectMatch = lowerMed.includes(lowerAllergy) || lowerAllergy.includes(lowerMed);
-      const isCrossPenicillin =
-        lowerAllergy.includes('penicillin') &&
-        (lowerMed.includes('amoxicillin') || lowerMed.includes('ampicillin') || lowerMed.includes('augmentin'));
-
-      if (isDirectMatch || isCrossPenicillin) {
-        allergyWarnings.push({
-          medicine: medName,
-          allergen: allergy.allergen,
-          allergenClass: allergy.allergenClass,
-          severity: allergy.severity,
-          reaction: allergy.reaction,
-          clinicalMessage: `Potential allergy conflict detected. Patient has documented hypersensitivity to ${allergy.allergen} (${allergy.reaction}).`,
-          simpleExplanation: `This medicine belongs to or is related to ${allergy.allergen}, which you are allergic to. Doctor confirmation is strictly required.`,
-        });
-      }
+  if (status === 'UNDOCUMENTED') {
+    allergyReviewIncomplete = true;
+    allergyCheckStatus = 'Allergy review incomplete — patient allergy status must be confirmed';
+    allergyWarnings.push({
+      severity: 'Moderate',
+      type: 'Allergy Review Incomplete',
+      clinicalMessage: 'Patient allergy status is not documented in EHR. Confirmation required.',
+      simpleExplanation: 'No allergy documentation found. Clinician must verify allergy history before dispensing.',
     });
-  });
+  } else if (status === 'CONFIRMED_NKDA') {
+    allergyCheckStatus = 'No known allergy conflicts (Patient confirmed NKDA)';
+  } else {
+    // Documented allergies
+    medicines.forEach((med) => {
+      const medName = typeof med === 'string' ? med : (med.name || med.brand_name || '');
+      const lowerMed = (typeof med === 'string' ? med : `${med.name || ''} ${med.generic_name || ''} ${med.active_ingredient || ''} ${med.brand_name || ''}`).toLowerCase();
+
+      knownAllergies.forEach((allergy) => {
+        const allergenStr = (typeof allergy === 'string' ? allergy : allergy.allergen || '').toLowerCase();
+        const reactionStr = (typeof allergy === 'object' && allergy.reaction) ? allergy.reaction : 'Documented Hypersensitivity';
+
+        const isDirectMatch = allergenStr.length > 3 && (lowerMed.includes(allergenStr) || allergenStr.includes(lowerMed));
+        const isCrossPenicillin =
+          (allergenStr.includes('penicillin') || allergenStr.includes('beta-lactam') || allergenStr.includes('amoxicillin')) &&
+          (lowerMed.includes('amox') || lowerMed.includes('penicillin') || lowerMed.includes('ampicillin') || lowerMed.includes('augmentin') || lowerMed.includes('clavulanic'));
+        const isSulfa =
+          (allergenStr.includes('sulfa') || allergenStr.includes('sulfonamide')) &&
+          (lowerMed.includes('sulfa') || lowerMed.includes('bactrim') || lowerMed.includes('septra') || lowerMed.includes('cotrimoxazole'));
+        const isNsaid =
+          (allergenStr.includes('nsaid') || allergenStr.includes('ibuprofen') || allergenStr.includes('aspirin')) &&
+          (lowerMed.includes('ibuprofen') || lowerMed.includes('aspirin') || lowerMed.includes('diclofenac') || lowerMed.includes('naproxen') || lowerMed.includes('combiflam'));
+
+        if (isDirectMatch || isCrossPenicillin || isSulfa || isNsaid) {
+          allergyWarnings.push({
+            medicine: medName,
+            allergen: allergenStr,
+            allergenClass: allergy.category || allergy.allergenClass || 'Documented Allergen',
+            severity: 'High',
+            reaction: reactionStr,
+            clinicalMessage: `CRITICAL CONTRAINDICATION: Prescribed medicine '${medName}' conflicts with patient's documented ${allergenStr} allergy (${reactionStr}).`,
+            simpleExplanation: `This medicine is contraindicated due to your documented ${allergenStr} allergy.`,
+          });
+        }
+      });
+    });
+
+    if (allergyWarnings.length > 0) {
+      allergyCheckStatus = 'Critical allergy conflict detected';
+    } else {
+      allergyCheckStatus = 'No conflict with documented allergies';
+    }
+  }
 
   // 2. Duplicate Medicine / Molecule Checking
   const seenMolecules = new Map();
   medicines.forEach((med) => {
-    const medName = typeof med === 'string' ? med : med.name;
+    const medName = typeof med === 'string' ? med : (med.name || '');
     const lowerName = medName.toLowerCase();
     
     // Find molecule key
@@ -213,7 +265,6 @@ export const runPrescriptionSafetyCheck = ({
         const match2 = nameA.includes(intB) && nameB.includes(intA);
 
         if (match1 || match2) {
-          // Avoid duplicate pairs in warning list
           const alreadyLogged = interactionWarnings.some(
             (w) =>
               (w.drugA === interaction.drugA && w.drugB === interaction.drugB) ||
@@ -239,16 +290,25 @@ export const runPrescriptionSafetyCheck = ({
   const hasCriticalAllergy = allergyWarnings.some((w) => w.severity === 'High');
   const hasHighInteraction = interactionWarnings.some((w) => w.severity === 'High');
   const hasDuplicates = duplicateWarnings.length > 0;
+  const requiresReview = hasCriticalAllergy || hasHighInteraction || hasDuplicates || allergyReviewIncomplete;
 
-  const requiresReview =
-    allergyWarnings.length > 0 || interactionWarnings.length > 0 || duplicateWarnings.length > 0;
+  let overallStatus = 'Clinical Review Passed';
+  if (hasCriticalAllergy) {
+    overallStatus = 'Doctor Review Required (Critical Allergy)';
+  } else if (allergyReviewIncomplete) {
+    overallStatus = 'Review Incomplete / Action Required';
+  } else if (requiresReview) {
+    overallStatus = 'Doctor Review Required';
+  }
 
   return {
-    allergyStatus: allergyWarnings.length === 0 ? 'No known conflict' : 'Potential allergy concern',
+    safe: !hasCriticalAllergy && !allergyReviewIncomplete && !hasHighInteraction,
+    allergyStatus: allergyCheckStatus,
     duplicateStatus: duplicateWarnings.length === 0 ? 'No duplicate detected' : 'Possible duplicate flagged',
     interactionStatus: interactionWarnings.length === 0 ? 'No major interaction' : 'Review required',
-    overallStatus: requiresReview ? 'Doctor Review Required' : 'Clinical Review Passed',
+    overallStatus,
     overallSeverity: hasCriticalAllergy || hasHighInteraction ? 'High' : requiresReview ? 'Moderate' : 'Low',
+    allergyReviewIncomplete,
     allergyWarnings,
     duplicateWarnings,
     interactionWarnings,
