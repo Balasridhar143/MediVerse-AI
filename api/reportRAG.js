@@ -400,11 +400,14 @@ export function retrieveRAGKnowledge(queryText, extractedTests = [], topK = 3) {
     return {
       id: doc.id,
       title: doc.title,
+      guideline_title: doc.title,
       source: doc.source,
+      issuing_organization: doc.source,
       source_url: doc.source_url,
       category: doc.category,
       verified_at: doc.verified_at,
       content: doc.content,
+      relevant_content_excerpt: doc.content,
       relevance_score: Math.min(0.98, Math.round(score * 100) / 100)
     };
   });

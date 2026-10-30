@@ -1608,6 +1608,12 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
     } = req.query;
 
     const queryTerm = (search || q).toLowerCase().trim();
+    const altTerm = queryTerm
+      .replace(/amoxicillin/g, 'amox')
+      .replace(/amoxycillin/g, 'amox')
+      .replace(/paracetamol/g, 'para')
+      .replace(/acetaminophen/g, 'para');
+
     const catFilter = category.toLowerCase().trim();
     const formFilter = dosage_form.toLowerCase().trim();
     const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 24, 1), 100);
@@ -1616,14 +1622,17 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
     // Filter dataset
     let filtered = DATASET_MEDICINES.filter((med) => {
       if (queryTerm) {
-        const matchBrand = (med.brand_name || '').toLowerCase().includes(queryTerm);
-        const matchGeneric = (med.generic_name || '').toLowerCase().includes(queryTerm);
-        const matchComp = (med.composition || '').toLowerCase().includes(queryTerm);
-        const matchCat = (med.category || '').toLowerCase().includes(queryTerm);
-        const matchInd = (med.uses || '').toLowerCase().includes(queryTerm);
-        if (!matchBrand && !matchGeneric && !matchComp && !matchCat && !matchInd) {
-          return false;
-        }
+        const brand = (med.brand_name || '').toLowerCase();
+        const generic = (med.generic_name || '').toLowerCase();
+        const comp = (med.composition || '').toLowerCase();
+        const cat = (med.category || '').toLowerCase();
+        const ind = (med.uses || '').toLowerCase();
+
+        const match = brand.includes(queryTerm) || brand.includes(altTerm) ||
+                      generic.includes(queryTerm) || generic.includes(altTerm) ||
+                      comp.includes(queryTerm) || comp.includes(altTerm) ||
+                      cat.includes(queryTerm) || ind.includes(queryTerm);
+        if (!match) return false;
       }
 
       if (catFilter && catFilter !== 'all') {
@@ -1651,10 +1660,9 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
     const enrichedItems = paginatedSlice.map(enrichMedicineKnowledge);
 
     // Gather distinct categories and dosage forms
-    const categoriesSet = new Set();
+    const categoriesSet = new Set(CLINICAL_DRUG_CLASSES.map(c => c.category));
     const dosageFormsSet = new Set();
     DATASET_MEDICINES.forEach((m) => {
-      if (m.category) categoriesSet.add(m.category);
       if (m.dosage_form) dosageFormsSet.add(m.dosage_form);
     });
 
@@ -1689,10 +1697,14 @@ app.get(['/medicines/:id/knowledge', '/api/medicines/:id/knowledge'], async (req
     const { id } = req.params;
     const targetId = String(id).toLowerCase().trim();
 
-    const rawMed = DATASET_MEDICINES.find(m => 
-      String(m.id).toLowerCase() === targetId ||
-      (m.brand_name && m.brand_name.toLowerCase().replace(/[^a-z0-9]/g, '-') === targetId)
-    );
+    const rawMed = DATASET_MEDICINES.find(m => {
+      const mId = String(m.id).toLowerCase();
+      const numPart = mId.replace(/[^0-9]/g, '');
+      const targetNum = targetId.replace(/[^0-9]/g, '');
+      return mId === targetId ||
+             (numPart && targetNum && numPart === targetNum) ||
+             (m.brand_name && m.brand_name.toLowerCase().replace(/[^a-z0-9]/g, '-') === targetId);
+    });
 
     if (!rawMed) {
       return res.status(404).json({ detail: `Medicine not found for identifier: ${id}` });
