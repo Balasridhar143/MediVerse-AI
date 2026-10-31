@@ -6,18 +6,29 @@ import { neon } from '@neondatabase/serverless';
 import fs from 'fs';
 import path from 'path';
 
-const sql = neon(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+async function queryWithRetry(queryFn, maxRetries = 4, delayMs = 600) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await queryFn();
+    } catch (err) {
+      if (attempt === maxRetries) throw err;
+      await new Promise(res => setTimeout(res, delayMs * attempt));
+    }
+  }
+}
 
 async function main() {
   console.log('=== Step 1: Performing Safe Database Audit & Non-Destructive Backup ===\n');
 
+  const getClient = () => neon(process.env.DATABASE_URL || process.env.POSTGRES_URL);
+
   // Query all public tables
-  const tablesRes = await sql`
+  const tablesRes = await queryWithRetry(() => getClient()`
     SELECT table_name
     FROM information_schema.tables
     WHERE table_schema = 'public'
     ORDER BY table_name;
-  `;
+  `);
 
   const tables = tablesRes.map((r) => r.table_name);
   console.log(`Found ${tables.length} tables in PostgreSQL database:`);
@@ -37,12 +48,12 @@ async function main() {
 
   for (const table of tables) {
     try {
-      const countRes = await sql.query(`SELECT COUNT(*)::int as count FROM "${table}";`);
+      const countRes = await queryWithRetry(() => getClient().query(`SELECT COUNT(*)::int as count FROM "${table}";`));
       const count = countRes[0]?.count || 0;
       backupData.table_counts[table] = count;
 
       // Extract rows safely for backup
-      const rows = await sql.query(`SELECT * FROM "${table}";`);
+      const rows = await queryWithRetry(() => getClient().query(`SELECT * FROM "${table}";`));
       backupData.tables[table] = rows;
       console.log(`  ✓ Table: ${table.padEnd(30)} | Records: ${String(count).padStart(6)}`);
     } catch (err) {
