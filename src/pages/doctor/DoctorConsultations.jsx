@@ -21,7 +21,7 @@ import {
 
 export default function DoctorConsultations() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlAppointmentId = searchParams.get('appointmentId');
+  const urlAppointmentId = searchParams.get('appointmentId') || searchParams.get('id');
 
   const [appointments, setAppointments] = useState([]);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState(urlAppointmentId || '');
@@ -93,6 +93,27 @@ export default function DoctorConsultations() {
           </div>
         }
       />
+
+      {/* Target Consultation Notice Banner */}
+      {urlAppointmentId && !loading && appointments.length > 0 && !appointments.some((a) => a.id === urlAppointmentId) && urlAppointmentId !== 'apt_101' && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Consultation #{urlAppointmentId} could not be found or you may not be authorized. Connected to active clinical room.</span>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <Card className="p-12 text-center text-slate-500">

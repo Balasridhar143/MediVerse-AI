@@ -32,13 +32,16 @@ import AIPipelinePreview from '../../components/AIPipelinePreview';
 import UniversalLanguageSelector from '../../components/LanguageSelector';
 import { REPORT_CATEGORIES, MEDICAL_GLOSSARY } from '../../data/reports';
 import { reportService } from '../../services/reportService';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
 /**
  * MedicalReports
  * Advanced Medical Report Understanding & Workspace.
  */
 export default function MedicalReports() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetReportId = searchParams.get('id') || searchParams.get('reportId');
+
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -65,6 +68,19 @@ export default function MedicalReports() {
       setLoading(false);
     }
   };
+
+  // Automatically open reader if targeted by notification
+  useEffect(() => {
+    if (targetReportId && reports.length > 0) {
+      const matched = reports.find(
+        (r) => r.id === targetReportId || r.reportId === targetReportId
+      );
+      if (matched) {
+        setActiveTab('dashboard');
+        setActiveReaderReport(matched);
+      }
+    }
+  }, [targetReportId, reports]);
 
   // Search input ref to focus when clicking [Search Reports]
   const searchInputRef = useRef(null);
@@ -232,6 +248,33 @@ export default function MedicalReports() {
           <p className="text-[10px] text-slate-400 pt-0.5">Discuss at next visit</p>
         </div>
       </div>
+
+      {/* Target Report Missing / Unauthorized Alert Banner */}
+      {targetReportId && !loading && !reports.some((r) => r.id === targetReportId || r.reportId === targetReportId) && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start justify-between gap-3 shadow-2xs">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Medical Report Notice</p>
+              <p className="mt-0.5 text-amber-800">
+                Medical report #{targetReportId} was not found in your clinical records, or you may not be authorized to view it.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              newParams.delete('reportId');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Navigation Tabs for Advanced Report Sub-Views */}
       <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl text-xs overflow-x-auto">

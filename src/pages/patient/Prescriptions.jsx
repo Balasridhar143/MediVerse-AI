@@ -15,13 +15,14 @@ import {
   User,
   ShieldCheck,
   AlertTriangle,
+  AlertCircle,
   Info,
   Clock,
   Sparkles,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { prescriptionService } from '../../services/prescriptionService';
 import { runPrescriptionSafetyCheck, mockPatientAllergies } from '../../data/medicineSafetyData';
 import { useAuth } from '../../context/AuthContext';
@@ -36,6 +37,9 @@ import { useAuth } from '../../context/AuthContext';
  */
 export default function Prescriptions() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetRxId = searchParams.get('id') || searchParams.get('prescription_id') || searchParams.get('rxId');
+
   const [prescriptionsList, setPrescriptionsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -61,6 +65,25 @@ export default function Prescriptions() {
   useEffect(() => {
     loadPrescriptions();
   }, []);
+
+  // When navigated from a notification targeting a specific prescription ID:
+  // automatically open its full detail modal and scroll to the card
+  useEffect(() => {
+    if (targetRxId && prescriptionsList.length > 0) {
+      const matched = prescriptionsList.find(
+        (rx) => rx.id === targetRxId || rx.prescriptionId === targetRxId
+      );
+      if (matched) {
+        setSelectedPrescription(matched);
+        setTimeout(() => {
+          const el = document.getElementById(`rx-${matched.id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 150);
+      }
+    }
+  }, [targetRxId, prescriptionsList]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-10">
@@ -124,6 +147,34 @@ export default function Prescriptions() {
         </div>
       </div>
 
+      {/* Target Prescription Missing / Unauthorized Alert Banner */}
+      {targetRxId && !loading && !prescriptionsList.some((rx) => rx.id === targetRxId || rx.prescriptionId === targetRxId) && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start justify-between gap-3 shadow-2xs">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Prescription Record Notice</p>
+              <p className="mt-0.5 text-amber-800">
+                Official prescription #{targetRxId} was not found in your medical records, or you may not be authorized to view it.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              newParams.delete('prescription_id');
+              newParams.delete('rxId');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* 3. Loading & Error States */}
       {loading ? (
         <Card className="p-12 text-center text-slate-500">
@@ -154,6 +205,7 @@ export default function Prescriptions() {
         /* 4. Prescriptions List */
         <div className="space-y-6">
           {prescriptionsList.map((rx) => {
+            const isTargeted = targetRxId && (rx.id === targetRxId || rx.prescriptionId === targetRxId);
             // Run safety screening on this prescription
             const safetyResult = runPrescriptionSafetyCheck({
               medicines: rx.medicines,
@@ -161,7 +213,15 @@ export default function Prescriptions() {
             });
 
             return (
-              <Card key={rx.id} className="space-y-4">
+              <Card
+                key={rx.id}
+                id={`rx-${rx.id}`}
+                className={`space-y-4 transition-all duration-300 ${
+                  isTargeted
+                    ? 'ring-2 ring-teal-500 bg-teal-50/20 border-teal-400 shadow-md'
+                    : ''
+                }`}
+              >
                 {/* Header / Doctor & Hospital Information */}
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-200 pb-4">
                   <div className="flex items-start gap-3.5">
@@ -177,6 +237,11 @@ export default function Prescriptions() {
                           {rx.doctorSpecialization || rx.department || 'Internal Medicine'}
                         </span>
                         <StatusBadge status={rx.status || 'Active'} size="xs" />
+                        {isTargeted && (
+                          <span className="text-[10px] bg-teal-600 text-white font-bold px-2 py-0.5 rounded-full animate-pulse shadow-2xs">
+                            Targeted from Notification
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-slate-600 font-medium mt-0.5">
                         {rx.hospital || rx.hospitalName || 'Mediverse Health System'}

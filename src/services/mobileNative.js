@@ -3,6 +3,7 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { App as CapApp } from '@capacitor/app';
 import { notificationService } from './api';
+import { resolveNotificationDestination } from '../utils/notificationRouter';
 
 export const initializeMobileApp = async (navigate) => {
   if (!Capacitor.isNativePlatform()) {
@@ -65,11 +66,10 @@ export const initializeMobileApp = async (navigate) => {
 
       PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
         console.log('[Push] Notification action performed:', action);
-        const data = action.notification.data;
-        if (data && data.url && navigate) {
-          navigate(data.url);
-        } else if (navigate) {
-          navigate('/patient/appointments');
+        const data = action.notification?.data || {};
+        if (navigate) {
+          const target = data.url || resolveNotificationDestination(data) || '/patient/appointments';
+          navigate(target);
         }
       });
     }

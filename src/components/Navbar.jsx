@@ -20,6 +20,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { resolveNotificationDestination } from '../utils/notificationRouter';
 
 export default function Navbar({ onToggleSidebar }) {
   const { user, role, logout } = useAuth();
@@ -175,21 +176,29 @@ export default function Navbar({ onToggleSidebar }) {
     }
   }, [user]);
 
-  const handleMarkAsRead = async (notif) => {
+  const handleNotificationClick = async (notif) => {
+    // 1. Mark as read immediately (optimistic UI update + background API sync)
     if (!notif.is_read) {
-      try {
-        await notificationService.markAsRead(notif.id);
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === notif.id ? { ...n, is_read: true } : n))
-        );
-        setUnreadCount((c) => Math.max(0, c - 1));
-      } catch (e) {}
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notif.id ? { ...n, is_read: true } : n))
+      );
+      setUnreadCount((c) => Math.max(0, c - 1));
+      notificationService.markAsRead(notif.id).catch((e) => {
+        console.warn('Unable to persist notification read state:', e.message);
+      });
     }
-    if (notif.link_url) {
-      setShowNotifs(false);
-      navigate(notif.link_url);
+
+    // 2. Dismiss dropdown popover
+    setShowNotifs(false);
+
+    // 3. Resolve destination directly to the exact target record / section
+    const targetUrl = resolveNotificationDestination(notif, role);
+    if (targetUrl) {
+      navigate(targetUrl);
     }
   };
+
+  const handleMarkAsRead = handleNotificationClick;
 
   const handleMarkAllRead = async () => {
     try {
@@ -542,7 +551,15 @@ export default function Navbar({ onToggleSidebar }) {
                   notifications.map((notif) => (
                     <div
                       key={notif.id}
-                      onClick={() => handleMarkAsRead(notif)}
+                      onClick={() => handleNotificationClick(notif)}
+                      title="Click to view details"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          handleNotificationClick(notif);
+                        }
+                      }}
                       className={`p-3 space-y-0.5 hover:bg-slate-50 transition-colors cursor-pointer ${
                         !notif.is_read ? 'bg-teal-50/40' : ''
                       }`}

@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { hospitalDataService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
 import StatusBadge from '../../components/StatusBadge';
-import { Calendar, Search, Filter, Loader2 } from 'lucide-react';
+import { Calendar, Search, Filter, Loader2, AlertCircle } from 'lucide-react';
 
 export default function HospitalAppointments() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetAptId = searchParams.get('id') || searchParams.get('appointmentId');
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDept, setSelectedDept] = useState('All');
   const [selectedStatus, setSelectedStatus] = useState('All');
@@ -59,6 +63,33 @@ export default function HospitalAppointments() {
           </div>
         }
       />
+
+      {/* Target Appointment Missing / Unauthorized Alert Banner */}
+      {targetAptId && !loading && !appointments.some((apt) => apt.id === targetAptId) && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start justify-between gap-3 shadow-2xs">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Master Appointments Ledger Notice</p>
+              <p className="mt-0.5 text-amber-800">
+                Appointment #{targetAptId} was not found in the hospital master ledger or you may not have access.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              newParams.delete('appointmentId');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Filters Bar */}
       <div className="flex flex-wrap items-center gap-3 text-xs bg-white p-3 border border-slate-200 rounded-xl">
@@ -126,20 +157,38 @@ export default function HospitalAppointments() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredAppointments.map((apt) => (
-                    <tr key={apt.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">{apt.id}</td>
-                      <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">{apt.doctorName}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">{apt.department}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">{apt.date}</td>
-                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">{apt.time}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">{apt.type}</td>
-                      <td className="py-3 px-3 whitespace-nowrap">
-                        <StatusBadge status={apt.status} size="xs" />
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredAppointments.map((apt) => {
+                    const isTargeted = targetAptId === apt.id;
+                    return (
+                      <tr
+                        key={apt.id}
+                        id={`hosp-apt-${apt.id}`}
+                        className={`transition-colors ${
+                          isTargeted
+                            ? 'bg-teal-50/80 font-semibold border-l-4 border-l-teal-600'
+                            : 'hover:bg-slate-50/80'
+                        }`}
+                      >
+                        <td className="py-3 px-3 font-semibold text-teal-700 whitespace-nowrap">
+                          {apt.id}
+                          {isTargeted && (
+                            <span className="ml-1.5 text-[9px] bg-teal-600 text-white font-bold px-1.5 py-0.5 rounded">
+                              Target
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-900 whitespace-nowrap">{apt.patientName}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">{apt.doctorName}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">{apt.department}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">{apt.date}</td>
+                        <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">{apt.time}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">{apt.type}</td>
+                        <td className="py-3 px-3 whitespace-nowrap">
+                          <StatusBadge status={apt.status} size="xs" />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

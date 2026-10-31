@@ -1210,14 +1210,18 @@ app.post(['/auth/reset-password', '/api/auth/reset-password'], async (req, res) 
 
     // Create security alert notification
     const notifId = `notif_${crypto.randomBytes(8).toString('hex')}`;
+    const userRole = users[0].role || 'patient';
+    const secLink = userRole === 'doctor' ? '/doctor/security' : userRole === 'hospital_admin' || userRole === 'hospital' ? '/hospital/security' : '/patient/security';
     await sql`
-      INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+      INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
       VALUES (
         ${notifId},
         ${users[0].id},
         'SECURITY_ALERT',
         'Password Changed Successfully',
         'Your MediVerse AI account password was successfully updated. If you did not make this change, please contact healthcare security immediately.',
+        ${users[0].id},
+        ${secLink},
         FALSE,
         NOW()
       );
@@ -2594,9 +2598,10 @@ app.post(['/appointments', '/api/appointments'], authenticateToken, async (req, 
     // 5. Create Persistent Notification for Doctor
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
     const notifMessage = `Patient ${patientName} requested a ${type} consultation on ${targetDate} at ${targetTime}.`;
+    const docLink = `/doctor/dashboard?id=${appointmentId}`;
     await sql`
       INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
-      VALUES (${notifId}, ${doctorUserId}, 'APPOINTMENT_REQUEST', 'New Appointment Request', ${notifMessage}, ${appointmentId}, '/doctor/dashboard', FALSE, NOW());
+      VALUES (${notifId}, ${doctorUserId}, 'APPOINTMENT_REQUEST', 'New Appointment Request', ${notifMessage}, ${appointmentId}, ${docLink}, FALSE, NOW());
     `;
 
     return res.status(201).json({
@@ -2728,9 +2733,10 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
     // 4. Create Notification for Patient
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
     const notifMessage = `Your consultation with ${apt.doctor_name} on ${apt.appointment_date} at ${apt.time_slot} has been confirmed.`;
+    const patientLink = `/patient/appointments?id=${id}`;
     await sql`
       INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
-      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_CONFIRMED', 'Appointment Confirmed', ${notifMessage}, ${id}, '/patient/appointments', FALSE, NOW());
+      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_CONFIRMED', 'Appointment Confirmed', ${notifMessage}, ${id}, ${patientLink}, FALSE, NOW());
     `;
 
     return res.json({
@@ -2779,9 +2785,10 @@ app.patch(['/appointments/:id/reject', '/api/appointments/:id/reject'], authenti
 
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
     const notifMessage = `Your consultation request with ${apt.doctor_name} for ${apt.appointment_date} was declined: ${reason}.`;
+    const patientLink = `/patient/appointments?id=${id}`;
     await sql`
       INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
-      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_REJECTED', 'Appointment Declined', ${notifMessage}, ${id}, '/patient/appointments', FALSE, NOW());
+      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_REJECTED', 'Appointment Declined', ${notifMessage}, ${id}, ${patientLink}, FALSE, NOW());
     `;
 
     return res.json({
@@ -2832,10 +2839,11 @@ app.patch(['/appointments/:id/cancel', '/api/appointments/:id/cancel'], authenti
     const cancelledBy = apt.patient_id === userId ? apt.patient_name : apt.doctor_name;
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
     const notifMessage = `The consultation on ${apt.appointment_date} at ${apt.time_slot} was cancelled by ${cancelledBy}.`;
+    const targetUrl = apt.patient_id === userId ? `/doctor/dashboard?id=${id}` : `/patient/appointments?id=${id}`;
 
     await sql`
       INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
-      VALUES (${notifId}, ${targetUserId}, 'APPOINTMENT_CANCELLED', 'Appointment Cancelled', ${notifMessage}, ${id}, '/appointments', FALSE, NOW());
+      VALUES (${notifId}, ${targetUserId}, 'APPOINTMENT_CANCELLED', 'Appointment Cancelled', ${notifMessage}, ${id}, ${targetUrl}, FALSE, NOW());
     `;
 
     return res.json({ id, status: 'CANCELLED', message: 'Appointment successfully cancelled.' });
@@ -4832,10 +4840,12 @@ app.post(['/prescriptions', '/api/prescriptions'], authenticateToken, async (req
 
     // 7. Dispatch Notification to Patient
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
+    const rxUrl = `/patient/prescriptions?id=${rxId}`;
     await sql`
-      INSERT INTO notifications (id, user_id, type, title, message, is_read, created_at)
+      INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
       VALUES (${notifId}, ${finalPatientUserId}, 'PRESCRIPTION_ISSUED', 'New Prescription Issued',
               ${`Dr. ${doctorName} has issued official prescription #${rxDisplayId} for your recent consultation.`},
+              ${rxId}, ${rxUrl},
               FALSE, NOW());
     `;
 

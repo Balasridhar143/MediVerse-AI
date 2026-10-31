@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { appointmentService, doctorService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
@@ -27,6 +27,9 @@ import {
 
 export default function DoctorDashboard() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetAptId = searchParams.get('id') || searchParams.get('appointmentId');
+
   const [appointments, setAppointments] = useState([]);
   const [stats, setStats] = useState({
     today_consultations: 0,
@@ -71,6 +74,22 @@ export default function DoctorDashboard() {
   useEffect(() => {
     fetchDoctorData();
   }, []);
+
+  // When navigated from notification with a specific appointment ID:
+  // smoothly scroll into view
+  useEffect(() => {
+    if (targetAptId && appointments.length > 0) {
+      const matched = appointments.find((a) => a.id === targetAptId);
+      if (matched) {
+        setTimeout(() => {
+          const el = document.getElementById(`doc-apt-${targetAptId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 150);
+      }
+    }
+  }, [targetAptId, appointments]);
 
   const handleAccept = async (id) => {
     setActionLoadingId(id);
@@ -205,6 +224,33 @@ export default function DoctorDashboard() {
         </div>
       )}
 
+      {/* Target Appointment Missing / Completed Alert Banner */}
+      {targetAptId && !loading && !appointments.some((apt) => apt.id === targetAptId) && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start justify-between gap-3 shadow-2xs">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Consultation Appointment Notice</p>
+              <p className="mt-0.5 text-amber-800">
+                Appointment #{targetAptId} is no longer pending or you may not be authorized to access this patient record.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              newParams.delete('appointmentId');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {!loading && !error && (
         <>
           {/* 3. Pending Appointment Requests (Separately Highlighted with Accept / Reject) */}
@@ -228,27 +274,39 @@ export default function DoctorDashboard() {
               </div>
             ) : (
               <div className="space-y-3">
-                {pendingRequests.map((apt) => (
-                  <div
-                    key={apt.id}
-                    className="p-4 bg-amber-50/40 border border-amber-200 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0 border border-amber-200">
-                        {apt.type === 'Video Consultation' ? (
-                          <Video className="w-5 h-5" />
-                        ) : (
-                          <Users className="w-5 h-5" />
-                        )}
-                      </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="font-bold text-slate-900 text-sm">{apt.patientName}</h4>
-                          <span className="text-xs text-slate-500 font-mono">
-                            {apt.patient_phone || apt.patient_email || apt.patientId}
-                          </span>
-                          <StatusBadge status="PENDING" size="xs" />
+                {pendingRequests.map((apt) => {
+                  const isTargeted = targetAptId === apt.id;
+                  return (
+                    <div
+                      key={apt.id}
+                      id={`doc-apt-${apt.id}`}
+                      className={`p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-300 ${
+                        isTargeted
+                          ? 'bg-amber-100/60 border-2 border-amber-500 shadow-md ring-2 ring-amber-400'
+                          : 'bg-amber-50/40 border border-amber-200'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-xs shrink-0 border border-amber-200">
+                          {apt.type === 'Video Consultation' ? (
+                            <Video className="w-5 h-5" />
+                          ) : (
+                            <Users className="w-5 h-5" />
+                          )}
                         </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-bold text-slate-900 text-sm">{apt.patientName}</h4>
+                            <span className="text-xs text-slate-500 font-mono">
+                              {apt.patient_phone || apt.patient_email || apt.patientId}
+                            </span>
+                            <StatusBadge status="PENDING" size="xs" />
+                            {isTargeted && (
+                              <span className="text-[10px] bg-amber-700 text-white font-bold px-2 py-0.5 rounded-full animate-pulse shadow-2xs">
+                                Targeted Request
+                              </span>
+                            )}
+                          </div>
                         <p className="text-xs text-slate-600">
                           <strong>Chief Complaint / Notes:</strong> {apt.chiefComplaint || 'Consultation and clinical assessment'}
                         </p>
@@ -279,7 +337,8 @@ export default function DoctorDashboard() {
                       </Button>
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             )}
           </Card>
@@ -301,27 +360,39 @@ export default function DoctorDashboard() {
               </div>
             ) : (
               <div className="space-y-3">
-                {confirmedOrUpcoming.map((apt) => (
-                  <div
-                    key={apt.id}
-                    className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 hover:border-teal-400 transition-colors"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center font-bold text-xs shrink-0 border border-teal-200">
-                        {apt.type === 'Video Consultation' ? (
-                          <Video className="w-4 h-4" />
-                        ) : (
-                          <Users className="w-4 h-4" />
-                        )}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="font-bold text-slate-900 text-sm">{apt.patientName}</h4>
-                          <span className="text-xs text-slate-500 font-medium">
-                            ({apt.patientId || 'Registered Patient'})
-                          </span>
-                          <StatusBadge status="CONFIRMED" size="xs" />
+                {confirmedOrUpcoming.map((apt) => {
+                  const isTargeted = targetAptId === apt.id;
+                  return (
+                    <div
+                      key={apt.id}
+                      id={`doc-apt-${apt.id}`}
+                      className={`p-3.5 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 transition-all duration-300 ${
+                        isTargeted
+                          ? 'bg-teal-50/70 border-2 border-teal-500 shadow-md ring-2 ring-teal-400'
+                          : 'bg-slate-50 border border-slate-200 hover:border-teal-400'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center font-bold text-xs shrink-0 border border-teal-200">
+                          {apt.type === 'Video Consultation' ? (
+                            <Video className="w-4 h-4" />
+                          ) : (
+                            <Users className="w-4 h-4" />
+                          )}
                         </div>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-bold text-slate-900 text-sm">{apt.patientName}</h4>
+                            <span className="text-xs text-slate-500 font-medium">
+                              ({apt.patientId || 'Registered Patient'})
+                            </span>
+                            <StatusBadge status="CONFIRMED" size="xs" />
+                            {isTargeted && (
+                              <span className="text-[10px] bg-teal-700 text-white font-bold px-2 py-0.5 rounded-full animate-pulse shadow-2xs">
+                                Targeted Session
+                              </span>
+                            )}
+                          </div>
                         <p className="text-xs text-slate-600 mt-0.5">
                           <strong>Chief Complaint:</strong> {apt.chiefComplaint || 'Clinical evaluation'}
                         </p>
@@ -349,7 +420,8 @@ export default function DoctorDashboard() {
                       </div>
                     </div>
                   </div>
-                ))}
+                );
+              })}
               </div>
             )}
           </Card>

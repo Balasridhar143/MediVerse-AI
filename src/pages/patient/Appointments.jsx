@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { appointmentService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -17,6 +17,9 @@ import {
 } from 'lucide-react';
 
 export default function Appointments() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetAptId = searchParams.get('id') || searchParams.get('appointmentId');
+
   const [activeTab, setActiveTab] = useState('All');
   const [appointmentsList, setAppointmentsList] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,6 +43,28 @@ export default function Appointments() {
   useEffect(() => {
     fetchAppointments();
   }, []);
+
+  // When navigated from notification with a specific appointment ID:
+  // ensure visible in current tab and smoothly scroll into view
+  useEffect(() => {
+    if (targetAptId && appointmentsList.length > 0) {
+      const matched = appointmentsList.find((a) => a.id === targetAptId);
+      if (matched) {
+        const s = (matched.status || '').toUpperCase();
+        if (activeTab === 'Pending' && s !== 'PENDING') setActiveTab('All');
+        else if (activeTab === 'Confirmed' && s !== 'CONFIRMED' && s !== 'UPCOMING') setActiveTab('All');
+        else if (activeTab === 'Cancelled' && s !== 'CANCELLED' && s !== 'REJECTED') setActiveTab('All');
+        else if (activeTab === 'Completed' && s !== 'COMPLETED') setActiveTab('All');
+
+        setTimeout(() => {
+          const el = document.getElementById(`apt-${targetAptId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 150);
+      }
+    }
+  }, [targetAptId, appointmentsList]);
 
   const handleCancelAppointment = async (id) => {
     if (!window.confirm('Are you sure you want to cancel this appointment request?')) {
@@ -126,10 +151,38 @@ export default function Appointments() {
         </div>
       )}
 
+      {/* Target Appointment Missing / Unauthorized Alert Banner */}
+      {targetAptId && !loading && !appointmentsList.some((apt) => apt.id === targetAptId) && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start justify-between gap-3 shadow-2xs">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Consultation Appointment Notice</p>
+              <p className="mt-0.5 text-amber-800">
+                Appointment #{targetAptId} was not found in your consultation ledger, or you may not be authorized to view it.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const newParams = new URLSearchParams(searchParams);
+              newParams.delete('id');
+              newParams.delete('appointmentId');
+              setSearchParams(newParams, { replace: true });
+            }}
+            className="text-amber-700 hover:text-amber-900 font-bold text-xs p-1 cursor-pointer"
+            title="Dismiss notice"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Appointments List */}
       {!loading && !error && (
         <div className="space-y-3">
           {filteredAppointments.map((apt) => {
+            const isTargeted = targetAptId === apt.id;
             const isPending = (apt.status || '').toUpperCase() === 'PENDING';
             const isConfirmed = (apt.status || '').toUpperCase() === 'CONFIRMED' || (apt.status || '').toUpperCase() === 'UPCOMING';
             const isCancelled = (apt.status || '').toUpperCase() === 'CANCELLED';
@@ -137,7 +190,15 @@ export default function Appointments() {
             const isCompleted = (apt.status || '').toUpperCase() === 'COMPLETED';
 
             return (
-              <Card key={apt.id} className="hover:border-teal-300 transition-colors">
+              <Card
+                key={apt.id}
+                id={`apt-${apt.id}`}
+                className={`transition-all duration-300 ${
+                  isTargeted
+                    ? 'ring-2 ring-teal-500 bg-teal-50/20 border-teal-400 shadow-md'
+                    : 'hover:border-teal-300'
+                }`}
+              >
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-start gap-3.5">
                     <div className="w-10 h-10 rounded-lg bg-teal-50 text-teal-700 flex items-center justify-center font-bold text-sm shrink-0 border border-teal-100">
@@ -150,6 +211,11 @@ export default function Appointments() {
                           {apt.specialization || apt.department || 'General Medicine'}
                         </span>
                         <StatusBadge status={apt.status} size="xs" />
+                        {isTargeted && (
+                          <span className="text-[10px] bg-teal-600 text-white font-bold px-2 py-0.5 rounded-full animate-pulse shadow-2xs">
+                            Targeted from Notification
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-slate-500 flex items-center gap-2">
                         <Building className="w-3.5 h-3.5 text-slate-400 shrink-0" />
