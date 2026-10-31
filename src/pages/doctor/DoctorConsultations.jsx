@@ -47,9 +47,6 @@ export default function DoctorConsultations() {
             const first = fullList[0];
             setSelectedAppointmentId(first.id);
             setSearchParams({ appointmentId: first.id }, { replace: true });
-          } else {
-            setSelectedAppointmentId('apt_101');
-            setSearchParams({ appointmentId: 'apt_101' }, { replace: true });
           }
         } else {
           setSelectedAppointmentId(urlAppointmentId);
@@ -95,7 +92,7 @@ export default function DoctorConsultations() {
       />
 
       {/* Target Consultation Notice Banner */}
-      {urlAppointmentId && !loading && appointments.length > 0 && !appointments.some((a) => a.id === urlAppointmentId) && urlAppointmentId !== 'apt_101' && (
+      {urlAppointmentId && !loading && appointments.length > 0 && !appointments.some((a) => a.id === urlAppointmentId) && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3 shadow-2xs">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
@@ -127,17 +124,9 @@ export default function DoctorConsultations() {
           </div>
           <h3 className="font-bold text-slate-900 text-base">No Confirmed Tele-Consultations</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            You do not currently have any confirmed video consultations scheduled on your roster. You can test the tele-room or view your dashboard.
+            You do not currently have any confirmed video consultations scheduled on your roster. Video consultations are only accessible during allotted appointment slots.
           </p>
           <div className="mt-4 flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              icon={Video}
-              onClick={() => handleSelectAppointment('apt_101')}
-            >
-              Enter Demo Room (#apt_101)
-            </Button>
             <Link to="/doctor/dashboard">
               <Button variant="primary" size="sm">
                 View Doctor Dashboard

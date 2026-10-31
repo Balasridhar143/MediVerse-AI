@@ -204,3 +204,4 @@ export function resolveNotificationDestination(notif, role) {
   // J. Fallback to portal dashboard
   return userRole === 'doctor' ? '/doctor/dashboard' : userRole === 'hospital' ? '/hospital/dashboard' : '/patient/dashboard';
 }
+

@@ -36,20 +36,16 @@ export default function Consultation() {
         const list = Array.isArray(data) ? data : [];
         setAppointments(list);
 
-        // If no appointmentId in URL, default to first confirmed or upcoming video appointment, or apt_101
+        // If no appointmentId in URL, default to first confirmed or upcoming video appointment
         if (!urlAppointmentId) {
           if (list.length > 0) {
             const active = list.find(
-              (a) => (a.status === 'CONFIRMED' || a.status === 'UPCOMING') && a.type === 'Video Consultation'
-            ) || list[0];
+              (a) => (a.status === 'CONFIRMED' || a.status === 'UPCOMING') && (a.type === 'Video Consultation' || a.type === 'Telemedicine')
+            ) || list.find((a) => a.type === 'Video Consultation' || a.type === 'Telemedicine') || list[0];
             if (active) {
               setSelectedAppointmentId(active.id);
               setSearchParams({ appointmentId: active.id }, { replace: true });
             }
-          } else {
-            // Default to verified demo room apt_101
-            setSelectedAppointmentId('apt_101');
-            setSearchParams({ appointmentId: 'apt_101' }, { replace: true });
           }
         } else {
           setSelectedAppointmentId(urlAppointmentId);
@@ -88,11 +84,11 @@ export default function Consultation() {
       />
 
       {/* Target Consultation Notice Banner */}
-      {urlAppointmentId && !loading && appointments.length > 0 && !appointments.some((a) => a.id === urlAppointmentId) && urlAppointmentId !== 'apt_101' && (
+      {urlAppointmentId && !loading && appointments.length > 0 && !appointments.some((a) => a.id === urlAppointmentId) && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3 shadow-2xs">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Consultation #{urlAppointmentId} could not be found or you may not be authorized. Connected to primary active consultation room.</span>
+            <span>Consultation #{urlAppointmentId} could not be found or you may not be authorized. Connected to your primary scheduled consultation room.</span>
           </div>
           <button
             onClick={() => {
@@ -120,20 +116,12 @@ export default function Consultation() {
           </div>
           <h3 className="font-bold text-slate-900 text-base">No Video Consultations Scheduled</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            You do not currently have any scheduled telemedicine consultations. You can test the tele-room or book a new session.
+            You do not currently have any scheduled telemedicine consultations. Tele-consultations are only accessible during your allotted appointment slot.
           </p>
           <div className="mt-4 flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="md"
-              icon={Video}
-              onClick={() => handleSelectAppointment('apt_101')}
-            >
-              Enter Demo Room (#apt_101)
-            </Button>
             <Link to="/patient/find-doctor">
               <Button variant="primary" size="md" icon={Stethoscope}>
-                Find Doctor & Book
+                Find Doctor & Book Consultation
               </Button>
             </Link>
           </div>

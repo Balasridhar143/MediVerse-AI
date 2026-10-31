@@ -619,6 +619,16 @@ export const doctorService = {
     const res = await api.get(`/doctor/patients/${patientId}/clinical-dossier`);
     return res.data;
   },
+
+  async registerPatient(data) {
+    const res = await api.post('/doctor/patients', data);
+    return res.data;
+  },
+
+  async updatePatient(id, data) {
+    const res = await api.put(`/doctor/patients/${id}`, data);
+    return res.data;
+  },
 };
 
 /**
@@ -695,8 +705,38 @@ export const hospitalDataService = {
     return res.data;
   },
 
+  async createDepartment(data) {
+    const res = await api.post('/hospital/departments', data);
+    return res.data;
+  },
+
+  async updateDepartment(id, data) {
+    const res = await api.put(`/hospital/departments/${id}`, data);
+    return res.data;
+  },
+
+  async getDepartmentDoctors(departmentId) {
+    const res = await api.get(`/hospital/departments/${departmentId}/doctors`);
+    return res.data;
+  },
+
+  async assignDoctorToDepartment(departmentId, doctorId) {
+    const res = await api.post(`/hospital/departments/${departmentId}/assign-doctor`, { doctorId });
+    return res.data;
+  },
+
   async getDoctors() {
     const res = await api.get('/hospital/doctors');
+    return res.data;
+  },
+
+  async createDoctor(data) {
+    const res = await api.post('/hospital/doctors', data);
+    return res.data;
+  },
+
+  async updateDoctor(id, data) {
+    const res = await api.put(`/hospital/doctors/${id}`, data);
     return res.data;
   },
 

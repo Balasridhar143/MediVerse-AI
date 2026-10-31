@@ -10,6 +10,7 @@ import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_H
 import { sendOtpEmail } from './email.js';
 import { CLINICAL_DRUG_CLASSES, enrichMedicineKnowledge, MEDICAL_DISCLAIMER } from './medicineKnowledge.js';
 import { executeMedicalReportRAGPipeline, CLINICAL_RAG_KNOWLEDGE_BASE } from './reportRAG.js';
+import { validateAppointmentSlot } from './appointmentSlotValidator.js';
 
 // Load expanded persistent clinical medicines catalog (5,600+ verified CDSCO / WHO / NLEM records)
 let EXPANDED_MEDICINES = DATASET_MEDICINES;
@@ -97,6 +98,7 @@ async function ensureTables(sql) {
       );
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`;
+    await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(32);`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS patients (
@@ -121,6 +123,10 @@ async function ensureTables(sql) {
     await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_status VARCHAR(32) DEFAULT 'UNDOCUMENTED';`;
     await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_confirmed_at TIMESTAMP WITH TIME ZONE;`;
     await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS allergy_confirmed_by VARCHAR(128);`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS hospital_id VARCHAR(64);`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS emergency_contact_name VARCHAR(128);`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS emergency_contact_phone VARCHAR(32);`;
+    await sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();`;
 
     await sql`
       CREATE TABLE IF NOT EXISTS patient_allergies (
@@ -231,6 +237,58 @@ async function ensureTables(sql) {
         WHERE apt.hospital_name = h.name AND (apt.hospital_id IS NULL OR apt.hospital_id = '');
       `;
     } catch (e) {}
+
+    // Auto-synchronize any orphaned hospital_admins into hospitals table
+    try {
+      const orphanAdmins = await sql`
+        SELECT ha.facility_id, ha.hospital_name, ha.user_id, ha.full_name
+        FROM hospital_admins ha
+        LEFT JOIN hospitals h ON ha.facility_id = h.id OR ha.facility_id = h.facility_id
+        WHERE h.id IS NULL AND ha.facility_id IS NOT NULL;
+      `;
+      for (const oa of orphanAdmins) {
+        const cleanFacId = oa.facility_id.trim();
+        const hCode = `HOSP_${cleanFacId.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16)}_${Date.now().toString().slice(-4)}`;
+        await sql`
+          INSERT INTO hospitals (id, name, code, facility_id, admin_user_id, admin_name, bed_capacity, status, created_at)
+          VALUES (${cleanFacId}, ${oa.hospital_name || 'Hospital Facility'}, ${hCode}, ${cleanFacId}, ${oa.user_id}, ${oa.full_name}, 150, 'ACTIVE', NOW())
+          ON CONFLICT (id) DO NOTHING;
+        `;
+      }
+    } catch (e) {
+      console.warn('Sync orphan hospital admins warning:', e.message);
+    }
+
+    // Auto-seed baseline operational departments for any registered hospital_admin currently having 0 departments
+    try {
+      const adminHospitalsWithoutDepts = await sql`
+        SELECT h.id, h.name
+        FROM hospitals h
+        JOIN hospital_admins ha ON ha.facility_id = h.id OR ha.facility_id = h.facility_id
+        LEFT JOIN departments d ON h.id = d.hospital_id
+        GROUP BY h.id, h.name
+        HAVING COUNT(d.id) = 0;
+      `;
+      for (const h of adminHospitalsWithoutDepts) {
+        const coreDepts = [
+          { name: 'General Medicine', code: 'GENMED', beds: 40 },
+          { name: 'Emergency & Trauma Care', code: 'EMERG', beds: 25 },
+          { name: 'Pediatrics', code: 'PED', beds: 20 },
+          { name: 'Cardiology', code: 'CARD', beds: 30 },
+          { name: 'Outpatient Division', code: 'OPD', beds: 15 }
+        ];
+        for (const cd of coreDepts) {
+          const dId = `dept_${h.id}_${cd.code.toLowerCase()}`;
+          await sql`
+            INSERT INTO departments (id, hospital_id, name, code, bed_count, status, created_at)
+            VALUES (${dId}, ${h.id}, ${cd.name}, ${cd.code}, ${cd.beds}, 'ACTIVE', NOW())
+            ON CONFLICT (id) DO NOTHING;
+          `;
+        }
+      }
+    } catch (e) {
+      console.warn('Sync core departments warning:', e.message);
+    }
 
     await sql`
       CREATE TABLE IF NOT EXISTS patient_registrations (
@@ -400,6 +458,8 @@ async function ensureTables(sql) {
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_dpr_patient ON doctor_patient_relationships(patient_id);`;
     await sql`CREATE INDEX IF NOT EXISTS idx_dpr_doctor ON doctor_patient_relationships(doctor_id);`;
+    await sql`ALTER TABLE doctor_patient_relationships ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE';`;
+    await sql`ALTER TABLE doctor_patient_relationships ADD COLUMN IF NOT EXISTS notes TEXT;`;
 
     // 13. Audit Logs
     await sql`
@@ -709,12 +769,37 @@ app.post(['/auth/register', '/api/auth/register'], async (req, res) => {
       `;
     } else if (normalizedRole === 'hospital_admin') {
       const adminId = `adm_${crypto.randomBytes(6).toString('hex')}`;
-      const hosp = hospital_name || hospitalName || 'Affiliated Medical Center';
-      const facId = facility_id || facilityId || assignedHospitalId || null;
+      const hosp = (hospital_name || hospitalName || 'Affiliated Medical Center').trim();
+      const facId = (facility_id || facilityId || assignedHospitalId || `hosp_${crypto.randomBytes(4).toString('hex')}`).trim();
       await sql`
         INSERT INTO hospital_admins (id, user_id, full_name, hospital_name, facility_id, created_at)
         VALUES (${adminId}, ${userId}, ${full_name.trim()}, ${hosp}, ${facId}, NOW());
       `;
+
+      // Guarantee hospital record exists
+      const hCode = `HOSP_${facId.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16)}_${Date.now().toString().slice(-4)}`;
+      await sql`
+        INSERT INTO hospitals (id, name, code, facility_id, admin_user_id, admin_name, bed_capacity, status, created_at)
+        VALUES (${facId}, ${hosp}, ${hCode}, ${facId}, ${userId}, ${full_name.trim()}, 150, 'ACTIVE', NOW())
+        ON CONFLICT (id) DO UPDATE SET admin_user_id = EXCLUDED.admin_user_id, admin_name = EXCLUDED.admin_name;
+      `;
+
+      // Seed baseline operational departments
+      const coreDepts = [
+        { name: 'General Medicine', code: 'GENMED', beds: 40 },
+        { name: 'Emergency & Trauma Care', code: 'EMERG', beds: 25 },
+        { name: 'Pediatrics', code: 'PED', beds: 20 },
+        { name: 'Cardiology', code: 'CARD', beds: 30 },
+        { name: 'Outpatient Division', code: 'OPD', beds: 15 }
+      ];
+      for (const cd of coreDepts) {
+        const dId = `dept_${facId}_${cd.code.toLowerCase()}`;
+        await sql`
+          INSERT INTO departments (id, hospital_id, name, code, bed_count, status, created_at)
+          VALUES (${dId}, ${facId}, ${cd.name}, ${cd.code}, ${cd.beds}, 'ACTIVE', NOW())
+          ON CONFLICT (id) DO NOTHING;
+        `;
+      }
     }
 
     // 6. Generate JWT Token
@@ -2969,26 +3054,297 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
     const sql = getDb();
     await ensureTables(sql);
 
+    const docRows = await sql`SELECT id, hospital_id FROM doctors WHERE user_id = ${doctorUserId} OR id = ${doctorUserId} LIMIT 1;`;
+    const docId = docRows[0]?.id || doctorUserId;
+    const hospId = docRows[0]?.hospital_id;
+
     const patients = await sql`
-      SELECT DISTINCT ON (a.patient_id)
-        a.patient_id as "patientId",
-        a.patient_name as "patientName",
-        COALESCE(p.age, 35) as age,
-        COALESCE(p.gender, 'M') as gender,
-        COALESCE(p.blood_group, 'O+') as "bloodGroup",
-        COALESCE(a.notes, a.department, 'Routine Consultation') as "primaryCondition",
-        a.appointment_date as "lastConsultation",
-        a.appointment_date as "nextFollowUp",
-        'Active Care' as status
-      FROM appointments a
-      LEFT JOIN patients p ON a.patient_id = p.user_id
-      WHERE a.doctor_id = ${doctorUserId}
-      ORDER BY a.patient_id, a.created_at DESC;
+      SELECT DISTINCT ON (patient_key)
+        patient_key as "patientId",
+        patient_name as "patientName",
+        age,
+        gender,
+        blood_group as "bloodGroup",
+        primary_condition as "primaryCondition",
+        last_consultation as "lastConsultation",
+        next_follow_up as "nextFollowUp",
+        phone,
+        email,
+        status
+      FROM (
+        -- 1. Patients with appointments for this doctor
+        SELECT
+          a.patient_id as patient_key,
+          a.patient_name as patient_name,
+          COALESCE(p.age, 35) as age,
+          COALESCE(p.gender, 'M') as gender,
+          COALESCE(p.blood_group, 'O+') as blood_group,
+          COALESCE(a.notes, a.department, 'Routine Consultation') as primary_condition,
+          a.appointment_date as last_consultation,
+          a.appointment_date as next_follow_up,
+          p.phone as phone,
+          u.email as email,
+          'Active Care' as status,
+          a.created_at as sort_time
+        FROM appointments a
+        JOIN users u ON a.patient_id = u.id
+        LEFT JOIN patients p ON a.patient_id = p.user_id
+        WHERE a.doctor_id = ${doctorUserId} OR a.doctor_id = ${docId}
+
+        UNION ALL
+
+        -- 2. Patients with explicit doctor-patient relationship
+        SELECT
+          r.patient_id as patient_key,
+          p.full_name as patient_name,
+          COALESCE(p.age, 35) as age,
+          COALESCE(p.gender, 'M') as gender,
+          COALESCE(p.blood_group, 'O+') as blood_group,
+          COALESCE(r.notes, r.consent_notes, p.chronic_conditions, 'Clinical Care') as primary_condition,
+          TO_CHAR(r.created_at, 'YYYY-MM-DD') as last_consultation,
+          TO_CHAR(r.created_at + INTERVAL '7 days', 'YYYY-MM-DD') as next_follow_up,
+          p.phone as phone,
+          u.email as email,
+          'Active Care' as status,
+          r.created_at as sort_time
+        FROM doctor_patient_relationships r
+        JOIN users u ON r.patient_id = u.id
+        JOIN patients p ON r.patient_id = p.user_id
+        WHERE (r.doctor_id = ${doctorUserId} OR r.doctor_id = ${docId})
+          AND (r.status = 'ACTIVE' OR r.access_status = 'GRANTED')
+
+        UNION ALL
+
+        -- 3. Patients registered in doctor's hospital
+        SELECT
+          pr.user_id as patient_key,
+          pr.full_name as patient_name,
+          COALESCE(p.age, 35) as age,
+          COALESCE(p.gender, 'M') as gender,
+          COALESCE(p.blood_group, 'O+') as blood_group,
+          COALESCE(pr.reason_for_visit, pr.department, 'Outpatient Care') as primary_condition,
+          TO_CHAR(pr.registration_date, 'YYYY-MM-DD') as last_consultation,
+          TO_CHAR(pr.registration_date + INTERVAL '7 days', 'YYYY-MM-DD') as next_follow_up,
+          COALESCE(pr.phone, p.phone) as phone,
+          u.email as email,
+          'Hospital Inpatient' as status,
+          pr.created_at as sort_time
+        FROM patient_registrations pr
+        JOIN users u ON pr.user_id = u.id
+        LEFT JOIN patients p ON pr.user_id = p.user_id
+        WHERE ${hospId ? true : false} AND pr.hospital_id = ${hospId || 'none'}
+      ) combined
+      ORDER BY patient_key, sort_time DESC;
     `;
 
     return res.json(patients);
   } catch (err) {
     return res.status(500).json({ detail: `Failed to fetch doctor patients: ${err.message}` });
+  }
+});
+
+// Register / Add Patient by Doctor
+app.post(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'doctor' && req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Clinician or Administrator role required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // Resolve doctor's profile and hospital
+    let docId = req.user.id;
+    let docUserId = req.user.id;
+    let hospId = req.user.hospital_id || 'hosp_1';
+    let hospName = 'MediVerse Health System';
+    let docName = req.user.full_name || 'Attending Physician';
+    let deptName = 'General Medicine';
+
+    const docRows = await sql`
+      SELECT d.id, d.user_id, d.full_name, d.hospital_id, d.hospital_name, d.department, h.name as "resolvedHospName"
+      FROM doctors d
+      LEFT JOIN hospitals h ON d.hospital_id = h.id
+      WHERE d.user_id = ${req.user.id} OR d.id = ${req.user.id}
+      LIMIT 1;
+    `;
+    if (docRows.length > 0) {
+      docId = docRows[0].id;
+      docUserId = docRows[0].user_id || req.user.id;
+      docName = docRows[0].full_name;
+      hospId = docRows[0].hospital_id || hospId;
+      hospName = docRows[0].resolvedHospName || docRows[0].hospital_name || hospName;
+      deptName = docRows[0].department || deptName;
+    }
+
+    const {
+      fullName, name, email, phone, age, gender, bloodGroup, blood_group,
+      address, primaryCondition, condition, reasonForVisit, reason_for_visit,
+      emergencyContactName, emergencyContactPhone, allergies, allergyStatus, allergy_status, notes
+    } = req.body;
+
+    const patName = (fullName || name || '').trim();
+    if (!patName) {
+      return res.status(400).json({ detail: 'Patient full name is required.' });
+    }
+
+    const parsedAge = parseInt(age, 10) || 30;
+    const patGender = (gender || 'M').toUpperCase().startsWith('F') ? 'F' : 'M';
+    const patBlood = bloodGroup || blood_group || 'B+';
+    const patPhone = (phone || '').trim() || null;
+    const diag = primaryCondition || condition || reasonForVisit || reason_for_visit || 'Outpatient Registration';
+    const algStatus = allergyStatus || allergy_status || (allergies && allergies.length > 0 ? 'Documented Allergies' : 'No Known Drug Allergies');
+
+    // Handle user account
+    let patUserId;
+    const cleanEmail = email ? email.toLowerCase().trim() : null;
+    if (cleanEmail) {
+      const existingUsers = await sql`SELECT id, role FROM users WHERE LOWER(email) = ${cleanEmail} LIMIT 1;`;
+      if (existingUsers.length > 0) {
+        patUserId = existingUsers[0].id;
+      }
+    }
+
+    if (!patUserId) {
+      patUserId = `usr_${crypto.randomBytes(8).toString('hex')}`;
+      const defaultEmail = cleanEmail || `pat_${Date.now()}_${crypto.randomBytes(3).toString('hex')}@mediverse.local`;
+      const pwHash = await bcrypt.hash('Patient@123', 10);
+      await sql`
+        INSERT INTO users (id, full_name, email, password_hash, role, hospital_id, phone, created_at)
+        VALUES (${patUserId}, ${patName}, ${defaultEmail}, ${pwHash}, 'patient', ${hospId}, ${patPhone}, NOW());
+      `;
+    }
+
+    // Create or update patients record
+    const patId = `pat_${crypto.randomBytes(6).toString('hex')}`;
+    await sql`
+      INSERT INTO patients (
+        id, user_id, full_name, age, gender, blood_group, phone, address,
+        emergency_contact_name, emergency_contact_phone, hospital_id,
+        allergy_status, chronic_conditions, created_at
+      ) VALUES (
+        ${patId}, ${patUserId}, ${patName}, ${parsedAge}, ${patGender}, ${patBlood},
+        ${patPhone}, ${address || null}, ${emergencyContactName || null}, ${emergencyContactPhone || null},
+        ${hospId}, ${algStatus}, ${diag}, NOW()
+      )
+      ON CONFLICT (user_id) DO UPDATE 
+      SET full_name = ${patName}, age = ${parsedAge}, gender = ${patGender},
+          blood_group = COALESCE(${patBlood}, patients.blood_group),
+          phone = COALESCE(${patPhone}, patients.phone),
+          hospital_id = COALESCE(patients.hospital_id, ${hospId}),
+          updated_at = NOW();
+    `;
+
+    // Create doctor_patient_relationships record
+    const relId = `rel_${crypto.randomBytes(6).toString('hex')}`;
+    await sql`
+      INSERT INTO doctor_patient_relationships (id, doctor_id, patient_id, access_status, status, consent_notes, notes, granted_at, created_at)
+      VALUES (${relId}, ${docUserId}, ${patUserId}, 'GRANTED', 'ACTIVE', ${diag}, ${diag}, NOW(), NOW())
+      ON CONFLICT (patient_id, doctor_id) DO UPDATE SET access_status = 'GRANTED', status = 'ACTIVE', granted_at = NOW();
+    `;
+
+    // Create patient_registrations record associated with doctor's hospital
+    const regId = `reg_${crypto.randomBytes(6).toString('hex')}`;
+    await sql`
+      INSERT INTO patient_registrations (
+        id, user_id, patient_id, hospital_id, hospital_name, full_name, phone,
+        reason_for_visit, department, status, registration_date, created_at
+      ) VALUES (
+        ${regId}, ${patUserId}, ${patId}, ${hospId}, ${hospName}, ${patName}, ${patPhone},
+        ${diag}, ${deptName}, 'Active', NOW(), NOW()
+      );
+    `;
+
+    // Record allergies if provided
+    if (allergies && Array.isArray(allergies)) {
+      for (const al of allergies) {
+        const alId = `alg_${crypto.randomBytes(6).toString('hex')}`;
+        const alName = typeof al === 'string' ? al : al.allergen;
+        if (alName) {
+          await sql`
+            INSERT INTO patient_allergies (id, patient_id, allergen, category, severity, notes, documented_by_id, documented_by_name, created_at)
+            VALUES (${alId}, ${patUserId}, ${alName}, ${al.category || 'Medication allergy'}, ${al.severity || 'Moderate'}, ${al.notes || 'Documented at registration'}, ${docUserId}, ${docName}, NOW());
+          `;
+        }
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: `Patient '${patName}' registered and associated with ${hospName} successfully.`,
+      patient: {
+        patientId: patUserId,
+        recordId: patId,
+        patientName: patName,
+        age: parsedAge,
+        gender: patGender,
+        bloodGroup: patBlood,
+        phone: patPhone,
+        primaryCondition: diag,
+        hospitalId: hospId,
+        hospitalName: hospName,
+        assignedDoctor: docName,
+        lastConsultation: 'Registered Today',
+        status: 'Active Care',
+      },
+    });
+  } catch (err) {
+    console.error('Register patient error:', err);
+    return res.status(500).json({ detail: `Failed to register patient: ${err.message}` });
+  }
+});
+
+// Update Patient Details by Authorized Doctor
+app.put(['/doctor/patients/:id', '/api/doctor/patients/:id'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'doctor' && req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Clinician role required.' });
+    }
+
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const patRows = await sql`SELECT * FROM patients WHERE id = ${id} OR user_id = ${id} LIMIT 1;`;
+    if (patRows.length === 0) {
+      return res.status(404).json({ detail: 'Patient record not found.' });
+    }
+    const cur = patRows[0];
+
+    const { age, gender, bloodGroup, blood_group, phone, address, primaryCondition, chronic_conditions, allergyStatus, allergy_status, notes } = req.body;
+    const newAge = age !== undefined ? parseInt(age, 10) : cur.age;
+    const newGender = gender !== undefined ? gender : cur.gender;
+    const newBlood = bloodGroup || blood_group || cur.blood_group;
+    const newPhone = phone !== undefined ? phone : cur.phone;
+    const newAddress = address !== undefined ? address : cur.address;
+    const newCondition = primaryCondition || chronic_conditions || cur.chronic_conditions;
+    const newAllergyStatus = allergyStatus || allergy_status || cur.allergy_status;
+
+    await sql`
+      UPDATE patients
+      SET age = ${newAge}, gender = ${newGender}, blood_group = ${newBlood},
+          phone = ${newPhone}, address = ${newAddress}, chronic_conditions = ${newCondition},
+          allergy_status = ${newAllergyStatus}, updated_at = NOW()
+      WHERE id = ${cur.id} OR user_id = ${cur.user_id};
+    `;
+
+    return res.json({
+      success: true,
+      message: 'Patient clinical details updated successfully.',
+      patient: {
+        patientId: cur.user_id,
+        patientName: cur.full_name,
+        age: newAge,
+        gender: newGender,
+        bloodGroup: newBlood,
+        phone: newPhone,
+        primaryCondition: newCondition,
+        allergyStatus: newAllergyStatus,
+      },
+    });
+  } catch (err) {
+    console.error('Update patient error:', err);
+    return res.status(500).json({ detail: `Failed to update patient: ${err.message}` });
   }
 });
 
@@ -3028,21 +3384,25 @@ async function resolveHospitalContext(req, sql) {
 
   if (user && (user.role === 'hospital_admin' || user.role === 'admin')) {
     const adminHospitals = await sql`
-      SELECT h.id, h.name
+      SELECT h.id, h.name, h.facility_id
       FROM hospitals h
       WHERE h.admin_user_id = ${user.id}
+         OR h.id = (SELECT hospital_id FROM users WHERE id = ${user.id})
       UNION
-      SELECT ha.facility_id as id, ha.hospital_name as name
+      SELECT COALESCE(h2.id, ha.facility_id) as id, ha.hospital_name as name, ha.facility_id
       FROM hospital_admins ha
+      LEFT JOIN hospitals h2 ON ha.facility_id = h2.facility_id OR ha.facility_id = h2.id OR ha.hospital_name = h2.name
       WHERE ha.user_id = ${user.id}
     `;
 
     if (adminHospitals.length > 0) {
       if (requestedHospitalId && user.role !== 'admin') {
-        const hasAccess = adminHospitals.some((h) => h.id === requestedHospitalId);
+        const hasAccess = adminHospitals.some((h) => h.id === requestedHospitalId || h.facility_id === requestedHospitalId);
         if (!hasAccess) {
           return { error: 'Access denied: You do not have administrative authorization for this hospital facility.', status: 403 };
         }
+        const matched = adminHospitals.find(h => h.id === requestedHospitalId || h.facility_id === requestedHospitalId);
+        if (matched) requestedHospitalId = matched.id;
       } else if (!requestedHospitalId) {
         requestedHospitalId = adminHospitals[0].id;
       }
@@ -3068,6 +3428,22 @@ async function resolveHospitalContext(req, sql) {
   }
 
   const finalHospitalId = requestedHospitalId || 'hosp_1';
+  if (finalHospitalId) {
+    const hospExists = await sql`SELECT id FROM hospitals WHERE id = ${finalHospitalId} LIMIT 1;`;
+    if (hospExists.length === 0) {
+      let hospName = 'Medical Center';
+      if (user) {
+        const haRows = await sql`SELECT hospital_name FROM hospital_admins WHERE user_id = ${user.id} LIMIT 1;`;
+        if (haRows.length > 0) hospName = haRows[0].hospital_name;
+      }
+      const hospCode = `HOSP_${finalHospitalId.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16)}_${Date.now().toString().slice(-4)}`;
+      await sql`
+        INSERT INTO hospitals (id, name, code, facility_id, bed_capacity, status, created_at)
+        VALUES (${finalHospitalId}, ${hospName}, ${hospCode}, ${finalHospitalId}, 150, 'ACTIVE', NOW())
+        ON CONFLICT (id) DO NOTHING;
+      `;
+    }
+  }
   return { hospitalId: finalHospitalId };
 }
 
@@ -3289,6 +3665,483 @@ app.get(['/hospital/departments', '/api/hospital/departments'], optionalAuthToke
   } catch (err) {
     console.error('Error fetching departments:', err);
     return res.status(500).json({ detail: `Failed to fetch departments: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 12.1 HOSPITAL ADMIN: CLINICAL DEPARTMENT MANAGEMENT
+// ==========================================
+
+// Add / Provision New Department
+app.post(['/hospital/departments', '/api/hospital/departments'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Hospital Administrator role required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const { name, code, bed_count, bedCount, head_doctor_name, headDoctorName, head_doctor_id, headDoctorId, status: deptStatus } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ detail: 'Department name is required.' });
+    }
+
+    const cleanName = name.trim();
+    const cleanCode = (code || cleanName.substring(0, 4)).toUpperCase().trim();
+    const beds = parseInt(bed_count || bedCount, 10) || 20;
+    const headDoc = head_doctor_name || headDoctorName || null;
+    const headDocId = head_doctor_id || headDoctorId || null;
+    const finalStatus = deptStatus || 'ACTIVE';
+
+    // Verify hospital exists
+    const hospRows = await sql`SELECT id, name FROM hospitals WHERE id = ${hospitalId} LIMIT 1;`;
+    if (hospRows.length === 0) {
+      return res.status(404).json({ detail: 'Hospital facility not found.' });
+    }
+
+    // Check if department with identical name already exists in this hospital
+    const existing = await sql`
+      SELECT id, name FROM departments 
+      WHERE hospital_id = ${hospitalId} AND LOWER(name) = LOWER(${cleanName})
+      LIMIT 1;
+    `;
+    if (existing.length > 0) {
+      return res.status(409).json({ detail: `Department '${cleanName}' already exists in this hospital.` });
+    }
+
+    const deptId = `dept_${hospitalId}_${crypto.randomBytes(4).toString('hex')}`;
+    await sql`
+      INSERT INTO departments (id, hospital_id, name, code, head_doctor_name, head_doctor_id, bed_count, status, created_at)
+      VALUES (${deptId}, ${hospitalId}, ${cleanName}, ${cleanCode}, ${headDoc}, ${headDocId}, ${beds}, ${finalStatus}, NOW());
+    `;
+
+    return res.status(201).json({
+      success: true,
+      department: {
+        id: deptId,
+        hospitalId,
+        hospitalName: hospRows[0].name,
+        name: cleanName,
+        code: cleanCode,
+        headDoctor: headDoc,
+        headDoctorId: headDocId,
+        bedCount: beds,
+        status: finalStatus,
+        registeredDoctors: 0,
+        registeredPatients: 0,
+        totalAppointments: 0,
+      },
+      message: `Department '${cleanName}' created successfully.`,
+    });
+  } catch (err) {
+    console.error('Create department error:', err);
+    return res.status(500).json({ detail: `Failed to create department: ${err.message}` });
+  }
+});
+
+// Update Existing Department
+app.put(['/hospital/departments/:id', '/api/hospital/departments/:id'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Hospital Administrator role required.' });
+    }
+
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const existing = await sql`
+      SELECT * FROM departments 
+      WHERE id = ${id} AND hospital_id = ${hospitalId}
+      LIMIT 1;
+    `;
+    if (existing.length === 0) {
+      return res.status(404).json({ detail: 'Department not found in your hospital facility.' });
+    }
+
+    const { name, code, bed_count, bedCount, head_doctor_name, headDoctorName, head_doctor_id, headDoctorId, status: deptStatus } = req.body;
+    const cur = existing[0];
+    const cleanName = name ? name.trim() : cur.name;
+    const cleanCode = code ? code.trim().toUpperCase() : cur.code;
+    const beds = bed_count !== undefined ? parseInt(bed_count, 10) : bedCount !== undefined ? parseInt(bedCount, 10) : cur.bed_count;
+    const headDoc = head_doctor_name !== undefined ? head_doctor_name : headDoctorName !== undefined ? headDoctorName : cur.head_doctor_name;
+    const headDocId = head_doctor_id !== undefined ? head_doctor_id : headDoctorId !== undefined ? headDoctorId : cur.head_doctor_id;
+    const finalStatus = deptStatus || cur.status;
+
+    await sql`
+      UPDATE departments
+      SET name = ${cleanName}, code = ${cleanCode}, bed_count = ${beds},
+          head_doctor_name = ${headDoc}, head_doctor_id = ${headDocId}, status = ${finalStatus}
+      WHERE id = ${id} AND hospital_id = ${hospitalId};
+    `;
+
+    return res.json({
+      success: true,
+      department: {
+        id,
+        hospitalId,
+        name: cleanName,
+        code: cleanCode,
+        headDoctor: headDoc,
+        headDoctorId: headDocId,
+        bedCount: beds,
+        status: finalStatus,
+      },
+      message: 'Department updated successfully.',
+    });
+  } catch (err) {
+    console.error('Update department error:', err);
+    return res.status(500).json({ detail: `Failed to update department: ${err.message}` });
+  }
+});
+
+// View Doctors Belonging to a Department
+app.get(['/hospital/departments/:id/doctors', '/api/hospital/departments/:id/doctors'], optionalAuthToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const deptRows = await sql`SELECT id, name FROM departments WHERE id = ${id} AND hospital_id = ${hospitalId} LIMIT 1;`;
+    if (deptRows.length === 0) {
+      return res.status(404).json({ detail: 'Department not found in this hospital.' });
+    }
+    const deptName = deptRows[0].name;
+
+    const doctors = await sql`
+      SELECT DISTINCT ON (d.id)
+        d.id, COALESCE(u.full_name, d.full_name) as name, d.specialization,
+        d.license_number, d.hospital_id,
+        COALESCE(dha.department_name, d.department, ${deptName}) as department,
+        COALESCE(dha.department_id, d.department_id, ${id}) as "departmentId",
+        'OPD Room ' || (SUBSTRING(d.id FROM 5 FOR 3)) as room,
+        COALESCE(d.is_available, true) as "isAvailable",
+        CASE WHEN COALESCE(d.is_available, true) THEN 'On Duty' ELSE 'Off Duty' END as status,
+        COALESCE(dha.employment_status, d.employment_status, 'ACTIVE') as "employmentStatus",
+        COALESCE(dha.is_primary, true) as "isPrimary",
+        d.is_verified as "isVerified"
+      FROM doctors d
+      JOIN users u ON d.user_id = u.id
+      LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.hospital_id = ${hospitalId}
+      WHERE (d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId})
+        AND (
+          d.department_id = ${id}
+          OR dha.department_id = ${id}
+          OR LOWER(d.department) = LOWER(${deptName})
+          OR LOWER(dha.department_name) = LOWER(${deptName})
+        )
+      ORDER BY d.id, d.created_at DESC;
+    `;
+
+    return res.json(doctors);
+  } catch (err) {
+    console.error('Fetch department doctors error:', err);
+    return res.status(500).json({ detail: `Failed to fetch department doctors: ${err.message}` });
+  }
+});
+
+// Assign Doctor to Department
+app.post(['/hospital/departments/:id/assign-doctor', '/api/hospital/departments/:id/assign-doctor'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Hospital Administrator role required.' });
+    }
+
+    const { id } = req.params;
+    const { doctorId } = req.body;
+    if (!doctorId) {
+      return res.status(400).json({ detail: 'doctorId is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const deptRows = await sql`SELECT id, name FROM departments WHERE id = ${id} AND hospital_id = ${hospitalId} LIMIT 1;`;
+    if (deptRows.length === 0) {
+      return res.status(404).json({ detail: 'Department not found in your hospital facility.' });
+    }
+    const dept = deptRows[0];
+
+    // Check doctor exists
+    const docRows = await sql`SELECT id, full_name, hospital_id FROM doctors WHERE id = ${doctorId} OR user_id = ${doctorId} LIMIT 1;`;
+    if (docRows.length === 0) {
+      return res.status(404).json({ detail: 'Doctor profile not found.' });
+    }
+    const targetDoc = docRows[0];
+
+    // Update doctor's department in doctors table
+    await sql`
+      UPDATE doctors
+      SET department = ${dept.name}, department_id = ${dept.id},
+          hospital_id = COALESCE(hospital_id, ${hospitalId})
+      WHERE id = ${targetDoc.id};
+    `;
+
+    // Upsert affiliation
+    const affId = `aff_${targetDoc.id}_${hospitalId}`;
+    await sql`
+      INSERT INTO doctor_hospital_affiliations (id, doctor_id, hospital_id, department_id, department_name, employment_status, is_primary, created_at)
+      VALUES (${affId}, ${targetDoc.id}, ${hospitalId}, ${dept.id}, ${dept.name}, 'ACTIVE', true, NOW())
+      ON CONFLICT (doctor_id, hospital_id) 
+      DO UPDATE SET department_id = ${dept.id}, department_name = ${dept.name}, employment_status = 'ACTIVE';
+    `;
+
+    return res.json({
+      success: true,
+      message: `Dr. ${targetDoc.full_name} assigned to ${dept.name} department successfully.`,
+      doctor: {
+        id: targetDoc.id,
+        name: targetDoc.full_name,
+        department: dept.name,
+        departmentId: dept.id,
+        hospitalId: hospitalId,
+      },
+    });
+  } catch (err) {
+    console.error('Assign doctor error:', err);
+    return res.status(500).json({ detail: `Failed to assign doctor: ${err.message}` });
+  }
+});
+
+// ==========================================
+// 12.2 HOSPITAL ADMIN: DOCTOR REGISTRATION & MANAGEMENT
+// ==========================================
+
+// Add / Register Doctor Under Hospital
+app.post(['/hospital/doctors', '/api/hospital/doctors'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Hospital Administrator role required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    const hospRows = await sql`SELECT id, name FROM hospitals WHERE id = ${hospitalId} LIMIT 1;`;
+    if (hospRows.length === 0) {
+      return res.status(404).json({ detail: 'Hospital record not found.' });
+    }
+    const hosp = hospRows[0];
+
+    const {
+      fullName, name, email, password, phone, specialization,
+      department, departmentId, department_id, licenseNumber, license_number,
+      experienceYears, experience_years, consultationFee, consultation_fee,
+      isAvailable, is_available
+    } = req.body;
+
+    const docFullName = (fullName || name || '').trim();
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!docFullName || !cleanEmail) {
+      return res.status(400).json({ detail: 'Doctor full name and email are required.' });
+    }
+
+    const spec = specialization || 'General Medicine';
+    const dept = department || spec || 'General Medicine';
+    const deptId = departmentId || department_id || null;
+    const licNum = licenseNumber || license_number || null;
+    const exp = parseInt(experienceYears || experience_years, 10) || 5;
+    const fee = parseFloat(consultationFee || consultation_fee) || 500;
+    const available = isAvailable !== undefined ? Boolean(isAvailable) : is_available !== undefined ? Boolean(is_available) : true;
+
+    // Check if user account with this email already exists
+    const existingUsers = await sql`SELECT id, role, full_name, email FROM users WHERE LOWER(email) = ${cleanEmail} LIMIT 1;`;
+    if (existingUsers.length > 0) {
+      const u = existingUsers[0];
+      if (u.role === 'doctor') {
+        // Doctor already registered! Associate doctor under this hospital without creating duplicate accounts
+        const docRows = await sql`SELECT id, full_name FROM doctors WHERE user_id = ${u.id} OR id = ${u.id} LIMIT 1;`;
+        let docId = docRows[0]?.id;
+        if (!docId) {
+          docId = `doc_${crypto.randomBytes(6).toString('hex')}`;
+          await sql`
+            INSERT INTO doctors (id, user_id, full_name, specialization, license_number, hospital_id, hospital_name, department, department_id, is_verified, is_available, created_at)
+            VALUES (${docId}, ${u.id}, ${u.full_name}, ${spec}, ${licNum}, ${hospitalId}, ${hosp.name}, ${dept}, ${deptId}, true, ${available}, NOW());
+          `;
+        } else {
+          await sql`
+            UPDATE doctors
+            SET hospital_id = COALESCE(hospital_id, ${hospitalId}),
+                hospital_name = COALESCE(hospital_name, ${hosp.name}),
+                department = COALESCE(department, ${dept}),
+                department_id = COALESCE(department_id, ${deptId})
+            WHERE id = ${docId};
+          `;
+        }
+
+        const affId = `aff_${docId}_${hospitalId}`;
+        await sql`
+          INSERT INTO doctor_hospital_affiliations (id, doctor_id, hospital_id, department_id, department_name, employment_status, is_primary, created_at)
+          VALUES (${affId}, ${docId}, ${hospitalId}, ${deptId}, ${dept}, 'ACTIVE', false, NOW())
+          ON CONFLICT (doctor_id, hospital_id)
+          DO UPDATE SET department_id = COALESCE(${deptId}, doctor_hospital_affiliations.department_id),
+                        department_name = COALESCE(${dept}, doctor_hospital_affiliations.department_name),
+                        employment_status = 'ACTIVE';
+        `;
+
+        return res.status(200).json({
+          success: true,
+          message: `Existing doctor '${u.full_name}' affiliated with ${hosp.name}.`,
+          doctor: {
+            id: docId,
+            userId: u.id,
+            name: u.full_name,
+            email: u.email,
+            specialization: spec,
+            department: dept,
+            hospitalId: hospitalId,
+            hospitalName: hosp.name,
+            isExisting: true,
+          },
+        });
+      } else {
+        return res.status(400).json({ detail: `An account with email '${cleanEmail}' already exists with role '${u.role}'.` });
+      }
+    }
+
+    // New doctor account creation
+    const passwordHash = await bcrypt.hash(password || 'Doctor@123', 10);
+    const userId = `usr_${crypto.randomBytes(8).toString('hex')}`;
+    const docId = `doc_${crypto.randomBytes(6).toString('hex')}`;
+    const affId = `aff_${docId}_${hospitalId}`;
+
+    await sql`
+      INSERT INTO users (id, full_name, email, password_hash, role, hospital_id, phone, created_at)
+      VALUES (${userId}, ${docFullName}, ${cleanEmail}, ${passwordHash}, 'doctor', ${hospitalId}, ${phone || null}, NOW());
+    `;
+
+    await sql`
+      INSERT INTO doctors (id, user_id, full_name, specialization, license_number, hospital_id, hospital_name, department, department_id, experience_years, consultation_fee, is_verified, is_available, created_at)
+      VALUES (${docId}, ${userId}, ${docFullName}, ${spec}, ${licNum}, ${hospitalId}, ${hosp.name}, ${dept}, ${deptId}, ${exp}, ${fee}, true, ${available}, NOW());
+    `;
+
+    await sql`
+      INSERT INTO doctor_hospital_affiliations (id, doctor_id, hospital_id, department_id, department_name, employment_status, is_primary, created_at)
+      VALUES (${affId}, ${docId}, ${hospitalId}, ${deptId}, ${dept}, 'ACTIVE', true, NOW());
+    `;
+
+    return res.status(201).json({
+      success: true,
+      message: `Doctor '${docFullName}' registered and associated with ${hosp.name} successfully.`,
+      doctor: {
+        id: docId,
+        userId,
+        name: docFullName,
+        email: cleanEmail,
+        phone: phone || null,
+        specialization: spec,
+        department: dept,
+        licenseNumber: licNum,
+        hospitalId: hospitalId,
+        hospitalName: hosp.name,
+        isVerified: true,
+        isAvailable: available,
+        status: available ? 'On Duty' : 'Off Duty',
+      },
+    });
+  } catch (err) {
+    console.error('Register doctor error:', err);
+    return res.status(500).json({ detail: `Failed to register doctor: ${err.message}` });
+  }
+});
+
+// Update Doctor Association / Department / Availability
+app.put(['/hospital/doctors/:id', '/api/hospital/doctors/:id'], authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
+      return res.status(403).json({ detail: 'Access denied: Hospital Administrator role required.' });
+    }
+
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const { hospitalId, error, status } = await resolveHospitalContext(req, sql);
+    if (error) {
+      return res.status(status).json({ detail: error });
+    }
+
+    // Verify doctor belongs to or is affiliated with this hospital
+    const docRows = await sql`
+      SELECT d.*, dha.employment_status as aff_status
+      FROM doctors d
+      LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.hospital_id = ${hospitalId}
+      WHERE (d.id = ${id} OR d.user_id = ${id})
+        AND (d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId})
+      LIMIT 1;
+    `;
+    if (docRows.length === 0) {
+      return res.status(404).json({ detail: 'Doctor not found or not affiliated with your hospital.' });
+    }
+
+    const cur = docRows[0];
+    const { department, departmentId, department_id, specialization, isAvailable, is_available, status: dutyStatus, employmentStatus, employment_status, consultationFee, consultation_fee } = req.body;
+
+    const newDept = department !== undefined ? department : cur.department;
+    const newDeptId = departmentId !== undefined ? departmentId : department_id !== undefined ? department_id : cur.department_id;
+    const newSpec = specialization !== undefined ? specialization : cur.specialization;
+    const newAvailable = isAvailable !== undefined ? Boolean(isAvailable) : is_available !== undefined ? Boolean(is_available) : dutyStatus === 'On Duty' ? true : dutyStatus === 'Off Duty' ? false : cur.is_available;
+    const newEmpStatus = employmentStatus || employment_status || cur.employment_status || 'ACTIVE';
+    const newFee = consultationFee !== undefined ? parseFloat(consultationFee) : consultation_fee !== undefined ? parseFloat(consultation_fee) : cur.consultation_fee;
+
+    await sql`
+      UPDATE doctors
+      SET department = ${newDept}, department_id = ${newDeptId},
+          specialization = ${newSpec}, is_available = ${newAvailable},
+          employment_status = ${newEmpStatus}, consultation_fee = ${newFee}
+      WHERE id = ${cur.id};
+    `;
+
+    // Also update affiliation
+    await sql`
+      INSERT INTO doctor_hospital_affiliations (id, doctor_id, hospital_id, department_id, department_name, employment_status, is_primary, created_at)
+      VALUES (${'aff_' + cur.id + '_' + hospitalId}, ${cur.id}, ${hospitalId}, ${newDeptId}, ${newDept}, ${newEmpStatus}, true, NOW())
+      ON CONFLICT (doctor_id, hospital_id)
+      DO UPDATE SET department_id = ${newDeptId}, department_name = ${newDept}, employment_status = ${newEmpStatus};
+    `;
+
+    return res.json({
+      success: true,
+      message: 'Doctor details and hospital-department association updated successfully.',
+      doctor: {
+        id: cur.id,
+        name: cur.full_name,
+        department: newDept,
+        specialization: newSpec,
+        isAvailable: newAvailable,
+        status: newAvailable ? 'On Duty' : 'Off Duty',
+        employmentStatus: newEmpStatus,
+      },
+    });
+  } catch (err) {
+    console.error('Update doctor error:', err);
+    return res.status(500).json({ detail: `Failed to update doctor: ${err.message}` });
   }
 });
 
@@ -3522,14 +4375,14 @@ app.get(['/doctor/patients/:id/clinical-dossier', '/api/doctor/patients/:id/clin
     `;
 
     const reports = await sql`
-      SELECT id, report_type, title, file_url, created_at, status, notes
+      SELECT id, report_type, report_name as title, file_name, created_at, status
       FROM medical_reports
       WHERE patient_id = ${p.id} OR user_id = ${p.user_id}
       ORDER BY created_at DESC;
     `;
 
     const prescriptions = await sql`
-      SELECT id, doctor_name, diagnosis, medicines, instructions, status, created_at
+      SELECT id, prescription_id, doctor_name, diagnosis, clinical_notes, status, created_at
       FROM prescriptions
       WHERE patient_id = ${p.id} OR patient_id = ${p.user_id}
       ORDER BY created_at DESC;
@@ -3791,34 +4644,34 @@ app.get(['/consultation/room/:appointment_id', '/api/consultation/room/:appointm
     const sql = getDb();
     await ensureTables(sql);
 
-    let apt = null;
     const apts = await sql`SELECT * FROM appointments WHERE id = ${appointment_id} LIMIT 1;`;
-    if (apts && apts.length > 0) {
-      apt = apts[0];
-    } else if (appointment_id === 'apt_101') {
-      apt = {
-        id: 'apt_101',
-        patient_id: req.user.id,
-        doctor_id: 'usr_doc_001',
-        doctor_name: 'Dr. Arun Kumar',
-        patient_name: req.user.full_name || 'Patient',
-        hospital_name: 'City Care Multispeciality Hospital',
-        specialization: 'Cardiology & Internal Medicine',
-        appointment_date: new Date().toISOString().split('T')[0],
-        time_slot: '10:00 AM',
-        type: 'Video Consultation',
-        status: 'CONFIRMED'
-      };
-    } else {
+    if (!apts || apts.length === 0) {
       return res.status(404).json({ detail: `Appointment ${appointment_id} not found.` });
     }
+    const apt = apts[0];
 
-    const isPatient = req.user.id === apt.patient_id || (req.user.role === 'patient' && appointment_id === 'apt_101');
-    const isDoctor = req.user.id === apt.doctor_id || (req.user.role === 'doctor' && appointment_id === 'apt_101');
+    // Participant Authorization: strictly restrict to assigned patient, assigned doctor, or hospital admin
+    const isPatient = req.user.id === apt.patient_id;
+    const isDoctor =
+      req.user.id === apt.doctor_id ||
+      req.user.id === apt.doctor_profile_id;
+    const isAdmin = req.user.role === 'hospital_admin' || req.user.role === 'admin';
 
-    if (!isPatient && !isDoctor && req.user.role !== 'hospital_admin' && req.user.role !== 'admin') {
-      return res.status(403).json({ detail: 'Unauthorized: You are not an assigned participant in this consultation.' });
+    if (!isPatient && !isDoctor && !isAdmin) {
+      if (req.user.role === 'patient') {
+        return res.status(403).json({
+          detail: 'Access denied: You are not the assigned patient for this consultation.',
+          code: 'UNAUTHORIZED_PATIENT',
+        });
+      }
+      return res.status(403).json({
+        detail: 'Access denied: You are not the assigned physician for this consultation.',
+        code: 'UNAUTHORIZED_DOCTOR',
+      });
     }
+
+    // Appointment Slot Temporal & Status Validation
+    const slotValidation = validateAppointmentSlot(apt, new Date());
 
     const peerName = isPatient ? apt.doctor_name : apt.patient_name;
     const peerRole = isPatient ? 'doctor' : 'patient';
@@ -3838,6 +4691,7 @@ app.get(['/consultation/room/:appointment_id', '/api/consultation/room/:appointm
       peerName: peerName,
       peerRole: peerRole,
       iceServers: getIceServers(),
+      slotValidation,
     });
   } catch (err) {
     return res.status(500).json({ detail: `Room access error: ${err.message}` });
@@ -3851,30 +4705,40 @@ app.post(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:
     const sql = getDb();
     await ensureTables(sql);
 
-    let apt = null;
     const apts = await sql`SELECT * FROM appointments WHERE id = ${appointment_id} LIMIT 1;`;
-    if (apts && apts.length > 0) {
-      apt = apts[0];
-    } else if (appointment_id === 'apt_101') {
-      apt = { id: 'apt_101', patient_id: req.user.id, doctor_id: 'usr_doc_001' };
-    } else {
+    if (!apts || apts.length === 0) {
       return res.status(404).json({ detail: 'Appointment not found.' });
     }
+    const apt = apts[0];
 
-    const isParticipant =
-      req.user.id === apt.patient_id ||
+    // Participant Authorization
+    const isPatient = req.user.id === apt.patient_id;
+    const isDoctor =
       req.user.id === apt.doctor_id ||
-      appointment_id === 'apt_101' ||
-      req.user.role === 'hospital_admin';
+      req.user.id === apt.doctor_profile_id;
+    const isAdmin = req.user.role === 'hospital_admin' || req.user.role === 'admin';
 
-    if (!isParticipant) {
-      return res.status(403).json({ detail: 'Access denied.' });
+    if (!isPatient && !isDoctor && !isAdmin) {
+      return res.status(403).json({
+        detail: 'Access denied: You are not an assigned participant in this consultation.',
+        code: 'UNAUTHORIZED_PARTICIPANT',
+      });
     }
 
     const sigType = type || signal_type;
     const sigData = data || signal_data;
     if (!sigType) {
       return res.status(400).json({ detail: 'Signal type is required.' });
+    }
+
+    // Backend Slot Restrictions: Prevent starting a new call outside the permitted slot window
+    const slotValidation = validateAppointmentSlot(apt, new Date());
+    if (!slotValidation.canJoin && sigType !== 'leave') {
+      return res.status(403).json({
+        detail: slotValidation.message,
+        code: slotValidation.state,
+        slotValidation,
+      });
     }
 
     const clientSessionId = sessionId || req.headers['x-session-id'] || null;
@@ -3902,15 +4766,36 @@ app.get(['/consultation/room/:appointment_id/signal', '/api/consultation/room/:a
     const sql = getDb();
     await ensureTables(sql);
 
-    let apt = null;
     const apts = await sql`SELECT * FROM appointments WHERE id = ${appointment_id} LIMIT 1;`;
-    if (apts && apts.length > 0) {
-      apt = apts[0];
-    } else if (appointment_id === 'apt_101') {
-      apt = { id: 'apt_101', patient_id: req.user.id, doctor_id: 'usr_doc_001' };
-    } else {
+    if (!apts || apts.length === 0) {
       return res.status(404).json({ detail: 'Appointment not found.' });
     }
+    const apt = apts[0];
+
+    // Participant Authorization
+    const isPatient = req.user.id === apt.patient_id;
+    const isDoctor =
+      req.user.id === apt.doctor_id ||
+      req.user.id === apt.doctor_profile_id;
+    const isAdmin = req.user.role === 'hospital_admin' || req.user.role === 'admin';
+
+    if (!isPatient && !isDoctor && !isAdmin) {
+      return res.status(403).json({
+        detail: 'Access denied: You are not an assigned participant in this consultation.',
+        code: 'UNAUTHORIZED_PARTICIPANT',
+      });
+    }
+
+    // Backend Slot Restrictions on Signal Polling
+    const slotValidation = validateAppointmentSlot(apt, new Date());
+    if (!slotValidation.canJoin) {
+      return res.status(403).json({
+        detail: slotValidation.message,
+        code: slotValidation.state,
+        slotValidation,
+      });
+    }
+
     const roomId = `room_${apt.id}`;
 
     // Get signals sent by the other participant or other session in the last 5 minutes (preventing ancient stale offers)
@@ -3968,15 +4853,23 @@ app.post(['/consultation/room/:appointment_id/end', '/api/consultation/room/:app
     const sql = getDb();
     await ensureTables(sql);
 
-    let apt = null;
     const apts = await sql`SELECT * FROM appointments WHERE id = ${appointment_id} LIMIT 1;`;
-    if (apts && apts.length > 0) {
-      apt = apts[0];
-    } else if (appointment_id === 'apt_101') {
-      apt = { id: 'apt_101', patient_id: req.user.id, doctor_id: 'usr_doc_001' };
-    } else {
+    if (!apts || apts.length === 0) {
       return res.status(404).json({ detail: 'Appointment not found.' });
     }
+    const apt = apts[0];
+
+    // Participant Authorization
+    const isPatient = req.user.id === apt.patient_id;
+    const isDoctor =
+      req.user.id === apt.doctor_id ||
+      req.user.id === apt.doctor_profile_id;
+    const isAdmin = req.user.role === 'hospital_admin' || req.user.role === 'admin';
+
+    if (!isPatient && !isDoctor && !isAdmin) {
+      return res.status(403).json({ detail: 'Access denied.' });
+    }
+
     const roomId = `room_${apt.id}`;
     const userRole = req.user.id === apt.patient_id ? 'patient' : 'doctor';
 

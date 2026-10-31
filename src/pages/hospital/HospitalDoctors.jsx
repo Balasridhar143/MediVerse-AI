@@ -17,12 +17,46 @@ import {
   Mail,
   Award,
   Calendar,
+  Plus,
+  Edit,
+  CheckCircle2,
+  AlertCircle,
+  Building2,
 } from 'lucide-react';
 
 export default function HospitalDoctors() {
   const [searchTerm, setSearchTerm] = useState('');
   const [doctors, setDoctors] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Status Alerts
+  const [actionSuccess, setActionSuccess] = useState(null);
+  const [actionError, setActionError] = useState(null);
+
+  // Add Doctor Modal State
+  const [isAddDoctorModalOpen, setIsAddDoctorModalOpen] = useState(false);
+  const [addingDoctor, setAddingDoctor] = useState(false);
+  const [doctorForm, setDoctorForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    password: '',
+    specialization: 'General Medicine',
+    department: '',
+    licenseNumber: '',
+    experienceYears: 5,
+    isAvailable: true,
+  });
+
+  // Edit Doctor Modal State
+  const [editingDoctor, setEditingDoctor] = useState(null);
+  const [updatingDoctor, setUpdatingDoctor] = useState(false);
+  const [editForm, setEditForm] = useState({
+    specialization: '',
+    department: '',
+    isAvailable: true,
+  });
 
   // Sensitive Doctor Credentials State
   const [selectedDoctorId, setSelectedDoctorId] = useState(null);
@@ -31,12 +65,111 @@ export default function HospitalDoctors() {
   const [fetchingSensitive, setFetchingSensitive] = useState(false);
   const [sensitiveError, setSensitiveError] = useState(null);
 
+  const fetchDoctorRoster = async () => {
+    try {
+      const data = await hospitalDataService.getDoctors();
+      setDoctors(data || []);
+    } catch (err) {
+      console.error('Failed to fetch hospital doctors:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchDepartmentOptions = async () => {
+    try {
+      const depts = await hospitalDataService.getDepartments();
+      if (Array.isArray(depts)) setDepartments(depts);
+    } catch (err) {
+      console.warn('Failed to load department options:', err);
+    }
+  };
+
   useEffect(() => {
-    hospitalDataService.getDoctors()
-      .then((data) => setDoctors(data || []))
-      .catch((err) => console.error('Failed to fetch hospital doctors:', err))
-      .finally(() => setLoading(false));
+    fetchDoctorRoster();
+    fetchDepartmentOptions();
   }, []);
+
+  const openAddDoctorModal = () => {
+    setActionError(null);
+    setActionSuccess(null);
+    setDoctorForm({
+      fullName: '',
+      email: '',
+      phone: '',
+      password: '',
+      specialization: 'General Medicine',
+      department: departments[0]?.name || 'General Medicine',
+      licenseNumber: '',
+      experienceYears: 5,
+      isAvailable: true,
+    });
+    setIsAddDoctorModalOpen(true);
+  };
+
+  const handleRegisterDoctor = async (e) => {
+    e.preventDefault();
+    if (!doctorForm.fullName.trim() || !doctorForm.email.trim()) {
+      setActionError('Doctor full name and email are required.');
+      return;
+    }
+    setAddingDoctor(true);
+    setActionError(null);
+    try {
+      const res = await hospitalDataService.createDoctor({
+        fullName: doctorForm.fullName.trim(),
+        email: doctorForm.email.trim(),
+        phone: doctorForm.phone.trim(),
+        password: doctorForm.password || 'Doctor@123',
+        specialization: doctorForm.specialization,
+        department: doctorForm.department || doctorForm.specialization,
+        licenseNumber: doctorForm.licenseNumber.trim(),
+        experienceYears: parseInt(doctorForm.experienceYears, 10) || 5,
+        isAvailable: doctorForm.isAvailable,
+      });
+      setActionSuccess(res.message || `Doctor ${doctorForm.fullName} registered successfully.`);
+      setIsAddDoctorModalOpen(false);
+      await fetchDoctorRoster();
+      await fetchDepartmentOptions();
+    } catch (err) {
+      console.error('Doctor registration error:', err);
+      setActionError(err.response?.data?.detail || 'Failed to register doctor.');
+    } finally {
+      setAddingDoctor(false);
+    }
+  };
+
+  const openEditDoctorModal = (doc) => {
+    setActionError(null);
+    setActionSuccess(null);
+    setEditingDoctor(doc);
+    setEditForm({
+      specialization: doc.specialization || 'General Medicine',
+      department: doc.department || departments[0]?.name || 'General Medicine',
+      isAvailable: doc.status === 'On Duty' || doc.is_available === true,
+    });
+  };
+
+  const handleUpdateDoctor = async (e) => {
+    e.preventDefault();
+    setUpdatingDoctor(true);
+    setActionError(null);
+    try {
+      await hospitalDataService.updateDoctor(editingDoctor.id, {
+        specialization: editForm.specialization,
+        department: editForm.department,
+        isAvailable: editForm.isAvailable,
+      });
+      setActionSuccess(`Doctor ${editingDoctor.name} updated successfully.`);
+      setEditingDoctor(null);
+      await fetchDoctorRoster();
+    } catch (err) {
+      console.error('Doctor update error:', err);
+      setActionError(err.response?.data?.detail || 'Failed to update doctor details.');
+    } finally {
+      setUpdatingDoctor(false);
+    }
+  };
 
   const handleRequestSensitive = async (doctorId) => {
     setSelectedDoctorId(doctorId);
@@ -92,7 +225,7 @@ export default function HospitalDoctors() {
         badge="Medical Staff Directory"
         badgeStatus={`${doctors.length} Registered Clinicians`}
         title="Physician & Specialist Registry"
-        subtitle="Manage hospital medical staff, daily OPD room assignments, and consultation scheduling"
+        subtitle="Manage hospital medical staff, department assignments, and clinical availability"
         action={
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="w-full sm:w-64 relative">
@@ -107,9 +240,43 @@ export default function HospitalDoctors() {
                 className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm border border-slate-300 rounded-lg bg-white focus:border-teal-500"
               />
             </div>
+            <Button
+              variant="primary"
+              size="sm"
+              icon={Plus}
+              onClick={openAddDoctorModal}
+              className="whitespace-nowrap"
+            >
+              Add Doctor
+            </Button>
           </div>
         }
       />
+
+      {/* Action Alerts */}
+      {actionSuccess && (
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center justify-between text-xs sm:text-sm">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{actionSuccess}</span>
+          </div>
+          <button onClick={() => setActionSuccess(null)} className="text-emerald-600 hover:text-emerald-900">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl flex items-center justify-between text-xs sm:text-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="text-rose-600 hover:text-rose-900">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Doctors Table */}
       <Card title="Hospital Physician Roster" icon={Stethoscope}>
@@ -120,7 +287,11 @@ export default function HospitalDoctors() {
           </div>
         ) : filteredDoctors.length === 0 ? (
           <div className="p-8 text-center text-xs text-slate-500">
-            No doctors found matching your query.
+            <Stethoscope className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+            <p className="font-semibold text-slate-700">No doctors found matching your query.</p>
+            <Button variant="primary" size="sm" icon={Plus} onClick={openAddDoctorModal} className="mt-3">
+              Add First Doctor
+            </Button>
           </div>
         ) : (
           <div className="overflow-x-auto -mx-4 md:-mx-5">
@@ -131,11 +302,9 @@ export default function HospitalDoctors() {
                     <th className="py-3 px-3">Physician Name</th>
                     <th className="py-3 px-3">Specialization</th>
                     <th className="py-3 px-3">Department</th>
-                    <th className="py-3 px-3">Room / OPD</th>
-                    <th className="py-3 px-3">Consultation Type</th>
                     <th className="py-3 px-3">Shift Availability</th>
                     <th className="py-3 px-3">Duty Status</th>
-                    <th className="py-3 px-3 text-right">Credentials</th>
+                    <th className="py-3 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -147,16 +316,23 @@ export default function HospitalDoctors() {
                       <td className="py-3 px-3 text-teal-700 font-medium whitespace-nowrap">
                         {doc.specialization}
                       </td>
-                      <td className="py-3 px-3 whitespace-nowrap">{doc.department}</td>
-                      <td className="py-3 px-3 font-semibold text-slate-800 whitespace-nowrap">
-                        {doc.room}
+                      <td className="py-3 px-3 whitespace-nowrap font-medium text-slate-800">
+                        {doc.department || 'General Medicine'}
                       </td>
-                      <td className="py-3 px-3 whitespace-nowrap">{doc.consultationType}</td>
-                      <td className="py-3 px-3 text-slate-500 whitespace-nowrap">{doc.availability}</td>
+                      <td className="py-3 px-3 text-slate-500 whitespace-nowrap">{doc.availability || 'Full-Time OPD'}</td>
                       <td className="py-3 px-3 whitespace-nowrap">
                         <StatusBadge status={doc.status} size="xs" />
                       </td>
-                      <td className="py-3 px-3 whitespace-nowrap text-right">
+                      <td className="py-3 px-3 whitespace-nowrap text-right space-x-1.5">
+                        <button
+                          type="button"
+                          onClick={() => openEditDoctorModal(doc)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg font-medium text-[11px] transition-colors cursor-pointer"
+                          title="Edit Department or Availability"
+                        >
+                          <Edit className="w-3 h-3 text-slate-500" />
+                          <span>Edit</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleRequestSensitive(doc.id)}
@@ -180,6 +356,266 @@ export default function HospitalDoctors() {
         )}
       </Card>
 
+      {/* REGISTER NEW DOCTOR MODAL */}
+      {isAddDoctorModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-teal-800">
+                <Stethoscope className="w-5 h-5 text-teal-600" />
+                <h3 className="font-bold text-base">Register Doctor Under Hospital</h3>
+              </div>
+              <button
+                onClick={() => setIsAddDoctorModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRegisterDoctor} className="p-6 space-y-4 overflow-y-auto">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Doctor Full Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={doctorForm.fullName}
+                  onChange={(e) => setDoctorForm({ ...doctorForm, fullName: e.target.value })}
+                  placeholder="e.g. Dr. Rajesh Sharma"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={doctorForm.email}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, email: e.target.value })}
+                    placeholder="doctor@hospital.org"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Phone Number
+                  </label>
+                  <input
+                    type="tel"
+                    value={doctorForm.phone}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, phone: e.target.value })}
+                    placeholder="+91 98765 43210"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Medical Specialization
+                  </label>
+                  <input
+                    type="text"
+                    value={doctorForm.specialization}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, specialization: e.target.value })}
+                    placeholder="e.g. Cardiologist, Neurologist"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Assigned Department
+                  </label>
+                  <select
+                    value={doctorForm.department}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, department: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  >
+                    {departments.length === 0 ? (
+                      <option value="General Medicine">General Medicine</option>
+                    ) : (
+                      departments.map((dept) => (
+                        <option key={dept.id || dept.name} value={dept.name}>
+                          {dept.name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Medical License / NMC Reg
+                  </label>
+                  <input
+                    type="text"
+                    value={doctorForm.licenseNumber}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, licenseNumber: e.target.value })}
+                    placeholder="e.g. MCI-2024-5821"
+                    className="w-full px-3 py-2 text-sm uppercase font-mono border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Experience (Years)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={doctorForm.experienceYears}
+                    onChange={(e) => setDoctorForm({ ...doctorForm, experienceYears: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Initial Temporary Password
+                </label>
+                <input
+                  type="password"
+                  value={doctorForm.password}
+                  onChange={(e) => setDoctorForm({ ...doctorForm, password: e.target.value })}
+                  placeholder="Defaults to Doctor@123 if blank"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  type="checkbox"
+                  id="docAvailableCheckbox"
+                  checked={doctorForm.isAvailable}
+                  onChange={(e) => setDoctorForm({ ...doctorForm, isAvailable: e.target.checked })}
+                  className="rounded text-teal-600 focus:ring-teal-500"
+                />
+                <label htmlFor="docAvailableCheckbox" className="text-xs font-semibold text-slate-700">
+                  Doctor is currently On Duty / Available for consultations
+                </label>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsAddDoctorModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={addingDoctor}
+                  icon={addingDoctor ? Loader2 : Plus}
+                >
+                  {addingDoctor ? 'Registering...' : 'Register Doctor'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT DOCTOR / DEPARTMENT / AVAILABILITY MODAL */}
+      {editingDoctor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-teal-800">
+                <Edit className="w-5 h-5 text-teal-600" />
+                <h3 className="font-bold text-base">Edit: {editingDoctor.name}</h3>
+              </div>
+              <button
+                onClick={() => setEditingDoctor(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateDoctor} className="p-6 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Department Assignment
+                </label>
+                <select
+                  value={editForm.department}
+                  onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                >
+                  {departments.length === 0 ? (
+                    <option value="General Medicine">General Medicine</option>
+                  ) : (
+                    departments.map((dept) => (
+                      <option key={dept.id || dept.name} value={dept.name}>
+                        {dept.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Specialization
+                </label>
+                <input
+                  type="text"
+                  value={editForm.specialization}
+                  onChange={(e) => setEditForm({ ...editForm, specialization: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <input
+                  type="checkbox"
+                  id="editDocAvailableCheckbox"
+                  checked={editForm.isAvailable}
+                  onChange={(e) => setEditForm({ ...editForm, isAvailable: e.target.checked })}
+                  className="rounded text-teal-600 focus:ring-teal-500"
+                />
+                <label htmlFor="editDocAvailableCheckbox" className="text-xs font-semibold text-slate-700">
+                  Duty Status: {editForm.isAvailable ? 'On Duty' : 'Off Duty'}
+                </label>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingDoctor(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={updatingDoctor}
+                  icon={updatingDoctor ? Loader2 : CheckCircle2}
+                >
+                  {updatingDoctor ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Admin Security Password Re-authentication Modal */}
       <AdminPasswordModal
         isOpen={isAuthModalOpen}
@@ -201,88 +637,113 @@ export default function HospitalDoctors() {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-extrabold text-slate-900 text-base">{sensitiveDoctor.full_name}</h3>
-                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-mono font-bold px-2 py-0.5 rounded">
+                    <h3 className="text-base font-bold text-slate-900">{sensitiveDoctor.name}</h3>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-800">
                       NMC Verified
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
+                  <p className="text-xs text-slate-500 font-medium">
                     {sensitiveDoctor.specialization} • Department of {sensitiveDoctor.department}
                   </p>
                 </div>
               </div>
               <button
-                type="button"
                 onClick={() => setSensitiveDoctor(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Content */}
-            <div className="p-6 overflow-y-auto space-y-4 text-xs text-slate-700">
-              {/* Licensure & Accreditation */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <span className="font-bold text-slate-500 uppercase text-[10px] tracking-wider block">
-                  Medical Licensure & Registration
-                </span>
-                <div className="flex justify-between items-center">
-                  <span>Medical Council Registration No:</span>
-                  <span className="font-mono font-extrabold text-teal-800 text-sm bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                    {sensitiveDoctor.license_number}
-                  </span>
+            {/* Dossier Body */}
+            <div className="p-6 space-y-4 overflow-y-auto text-xs">
+              {/* Licensure Information */}
+              <div className="p-4 bg-teal-50/50 rounded-xl border border-teal-100 space-y-2">
+                <div className="flex items-center gap-1.5 text-teal-900 font-bold uppercase tracking-wider text-[10px]">
+                  <ShieldCheck className="w-4 h-4 text-teal-700" />
+                  National Medical Commission Verification
                 </div>
-                <div className="flex justify-between items-center pt-1 border-t border-slate-200/60">
-                  <span>Accreditation Council:</span>
-                  <span className="font-medium text-slate-800">{sensitiveDoctor.medical_council}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>Institutional Tax ID:</span>
-                  <span className="font-mono font-bold text-slate-700">{sensitiveDoctor.tax_pan_masked}</span>
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">NMC Registration No:</span>
+                    <span className="font-mono font-bold text-slate-900 text-xs">
+                      {sensitiveDoctor.licenseNumber}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">Medical Board Council:</span>
+                    <span className="font-semibold text-slate-900 text-xs">
+                      {sensitiveDoctor.medicalCouncil}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">Registration Year:</span>
+                    <span className="font-semibold text-slate-900 text-xs">
+                      {sensitiveDoctor.yearOfRegistration}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">Clinical Experience:</span>
+                    <span className="font-semibold text-slate-900 text-xs">
+                      {sensitiveDoctor.experienceYears} Years Verified
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Qualifications & Experience */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="font-bold text-slate-500 text-[10px] uppercase">Clinical Qualifications</span>
-                  <p className="font-bold text-slate-900 text-sm">{sensitiveDoctor.qualifications}</p>
-                </div>
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="font-bold text-slate-500 text-[10px] uppercase">Clinical Practice</span>
-                  <p className="font-bold text-slate-900 text-sm">{sensitiveDoctor.experience_years} Years Experience</p>
-                </div>
-              </div>
-
-              {/* Private Contact Information */}
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                <span className="font-bold text-slate-500 uppercase text-[10px] tracking-wider block">
+              {/* Direct Confidential Contact Information */}
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px]">
                   Confidential Clinician Contact
-                </span>
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-slate-600"><Phone className="w-3.5 h-3.5 text-teal-600" /> Personal Phone:</span>
-                  <span className="font-mono font-bold text-slate-800">{sensitiveDoctor.contact_phone}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 text-slate-600"><Mail className="w-3.5 h-3.5 text-teal-600" /> Verified Email:</span>
-                  <span className="font-medium text-slate-800">{sensitiveDoctor.email}</span>
+                </h4>
+                <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="flex items-center gap-2">
+                    <Phone className="w-4 h-4 text-teal-600" />
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Direct Phone</span>
+                      <span className="font-semibold text-slate-900">{sensitiveDoctor.contactPhone}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Mail className="w-4 h-4 text-teal-600" />
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">Official Email</span>
+                      <span className="font-semibold text-slate-900 truncate max-w-[170px] block">
+                        {sensitiveDoctor.contactEmail}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Audit Badge */}
-              <div className="p-2.5 bg-teal-50 border border-teal-200 rounded-xl flex items-center justify-between text-[11px] text-teal-900">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <ShieldCheck className="w-4 h-4 text-teal-600" /> Licensure Review Audited & Timestamped
-                </span>
-                <span className="font-mono text-[10px] text-teal-700">Audit ID: #DOC-{Date.now().toString().slice(-6)}</span>
+              {/* Qualifications */}
+              <div className="space-y-1.5">
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                  <Award className="w-3.5 h-3.5 text-teal-600" /> Verified Credentials & Degrees
+                </h4>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-slate-700">
+                  <p className="font-medium">{sensitiveDoctor.qualifications}</p>
+                </div>
+              </div>
+
+              {/* Administrative Compliance Notice */}
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <p>
+                  This clinician credential record was logged under NABH / ISO-27001 healthcare compliance standards.
+                </p>
               </div>
             </div>
 
             {/* Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
-              <Button variant="primary" size="sm" onClick={() => setSensitiveDoctor(null)}>
-                Close Credentials
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Authenticated Access</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSensitiveDoctor(null)}
+              >
+                Close Dossier
               </Button>
             </div>
           </div>

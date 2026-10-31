@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { consultationService } from '../services/api';
+import { validateAppointmentSlot } from '../utils/appointmentSlotValidator';
 import Button from './Button';
 import Card from './Card';
 import StatusBadge from './StatusBadge';
@@ -12,6 +14,7 @@ import {
   Send,
   ShieldCheck,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   Sparkles,
   User,
@@ -23,6 +26,10 @@ import {
   Activity,
   Play,
   Wifi,
+  Volume2,
+  VolumeX,
+  Building,
+  Calendar,
 } from 'lucide-react';
 
 export default function WebRTCConsultationRoom({
@@ -33,6 +40,7 @@ export default function WebRTCConsultationRoom({
   const [roomData, setRoomData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [slotValidation, setSlotValidation] = useState(null);
 
   // Call status
   const [inCall, setInCall] = useState(false);
@@ -40,6 +48,7 @@ export default function WebRTCConsultationRoom({
   const [peerConnected, setPeerConnected] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  const [remoteAudioMuted, setRemoteAudioMuted] = useState(false);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnostics, setDiagnostics] = useState({
     connectionState: 'idle',
@@ -104,6 +113,24 @@ export default function WebRTCConsultationRoom({
       cleanupCall();
     };
   }, [appointmentId]);
+
+  // Live Appointment Slot Validator - continuously evaluates permitted consultation window
+  useEffect(() => {
+    if (!roomData) return;
+
+    const evaluateSlot = () => {
+      const result = validateAppointmentSlot({
+        status: roomData.status,
+        appointment_date: roomData.appointmentDate,
+        time_slot: roomData.timeSlot,
+      }, new Date());
+      setSlotValidation(result);
+    };
+
+    evaluateSlot();
+    const interval = setInterval(evaluateSlot, 5000);
+    return () => clearInterval(interval);
+  }, [roomData]);
 
   // Synchronize local media stream to local video element
   useEffect(() => {
@@ -285,26 +312,46 @@ export default function WebRTCConsultationRoom({
         }
       };
 
+      const attachAndPlayRemote = async () => {
+        if (!remoteVideoRef.current || !remoteStreamRef.current) return;
+        if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) {
+          remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        }
+
+        // Fix mobile video playback: Set playsInline and initially muted
+        // Autoplay policies in mobile browsers (Android Chrome, iOS Safari) strictly permit muted video autoplay.
+        // This ensures the video canvas is never black.
+        remoteVideoRef.current.playsInline = true;
+        remoteVideoRef.current.muted = true;
+
+        try {
+          await remoteVideoRef.current.play();
+          setPeerConnected(true);
+          setAutoplayBlocked(false);
+
+          // Once video playback is established, attempt unmuting audio automatically
+          try {
+            remoteVideoRef.current.muted = false;
+            setRemoteAudioMuted(false);
+          } catch (audioErr) {
+            console.warn('[WebRTC] Audio auto-unmute deferred by browser policy:', audioErr);
+            remoteVideoRef.current.muted = true;
+            setRemoteAudioMuted(true);
+          }
+        } catch (playErr) {
+          console.warn('[WebRTC] Video playback notice:', playErr);
+          setPeerConnected(true);
+          setRemoteAudioMuted(true);
+        }
+      };
+
       event.track.onunmute = () => {
         console.log('[WebRTC] Remote track unmuted:', event.track.kind);
-        if (remoteVideoRef.current && remoteStreamRef.current) {
-          remoteVideoRef.current.srcObject = remoteStreamRef.current;
-          remoteVideoRef.current.play().catch((playErr) => {
-            console.warn('[WebRTC] Autoplay deferred:', playErr);
-            setAutoplayBlocked(true);
-          });
-        }
+        attachAndPlayRemote();
         updateTrackCounts();
       };
 
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStreamRef.current;
-        remoteVideoRef.current.play().catch((playErr) => {
-          console.warn('[WebRTC] Autoplay deferred:', playErr);
-          setAutoplayBlocked(true);
-        });
-      }
-      setPeerConnected(true);
+      attachAndPlayRemote();
       updateTrackCounts();
     };
 
@@ -340,12 +387,34 @@ export default function WebRTCConsultationRoom({
       }
     };
 
+    let iceWatchdogTimer = null;
     pc.oniceconnectionstatechange = () => {
       console.log('[WebRTC] ICE connection state:', pc.iceConnectionState);
       setDiagnostics((prev) => ({ ...prev, iceConnectionState: pc.iceConnectionState }));
+
+      // Watchdog: If ICE connection remains in 'checking' longer than 7 seconds, auto-restart ICE
+      if (pc.iceConnectionState === 'checking') {
+        if (!iceWatchdogTimer) {
+          iceWatchdogTimer = setTimeout(() => {
+            if (pcRef.current && (pcRef.current.iceConnectionState === 'checking' || pcRef.current.connectionState === 'connecting')) {
+              console.log('[WebRTC] ICE checking watchdog triggered automatic restart to unblock NAT');
+              handleRestartIce();
+            }
+          }, 7000);
+        }
+      } else {
+        if (iceWatchdogTimer) {
+          clearTimeout(iceWatchdogTimer);
+          iceWatchdogTimer = null;
+        }
+      }
+
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         setPeerConnected(true);
-      } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+      } else if (pc.iceConnectionState === 'failed') {
+        console.warn('[WebRTC] ICE connection failed, triggering renegotiation');
+        handleRestartIce();
+      } else if (pc.iceConnectionState === 'disconnected') {
         if (!remoteStreamRef.current || remoteStreamRef.current.getTracks().length === 0) {
           setPeerConnected(false);
         }
@@ -558,6 +627,10 @@ export default function WebRTCConsultationRoom({
 
   // 6. Start / Join Call
   const handleStartCall = async () => {
+    if (slotValidation && !slotValidation.canJoin) {
+      setError(slotValidation.message || 'Consultation room is only accessible during your allotted appointment slot.');
+      return;
+    }
     setConnecting(true);
     try {
       const stream = await startLocalMedia();
@@ -637,6 +710,7 @@ export default function WebRTCConsultationRoom({
     setInCall(false);
     setPeerConnected(false);
     setAutoplayBlocked(false);
+    setRemoteAudioMuted(false);
     setDiagnostics({
       connectionState: 'idle',
       iceConnectionState: 'idle',
@@ -841,6 +915,112 @@ export default function WebRTCConsultationRoom({
         </div>
       )}
 
+      {/* PART 1: Appointment Slot Restriction State Banner */}
+      {slotValidation && (
+        <>
+          {slotValidation.state === 'BEFORE_SLOT' && (
+            <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl text-xs text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center shrink-0 text-amber-700 shadow-2xs">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-bold text-amber-900 text-sm">Upcoming Scheduled Consultation</p>
+                  <p className="text-amber-800 text-xs mt-0.5">{slotValidation.message}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <span className="font-mono bg-white px-3 py-1.5 rounded-lg border border-amber-200 text-amber-900 font-bold text-xs shadow-2xs">
+                  Opens in {slotValidation.countdownStr}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {slotValidation.state === 'AFTER_SLOT' && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-rose-100 flex items-center justify-center shrink-0 text-rose-700 shadow-2xs">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="font-bold text-rose-900 text-sm">Consultation Slot Expired</p>
+                  <p className="text-rose-800 text-xs mt-0.5">{slotValidation.message}</p>
+                </div>
+              </div>
+              {userRole === 'patient' && (
+                <Link to="/patient/find-doctor" className="shrink-0 self-end sm:self-auto">
+                  <Button variant="outline" size="sm" icon={Calendar}>
+                    Book New Consultation
+                  </Button>
+                </Link>
+              )}
+            </div>
+          )}
+
+          {slotValidation.state === 'PENDING_APPROVAL' && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-950 flex items-center gap-3 shadow-2xs">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center shrink-0 text-amber-700 shadow-2xs">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="font-bold text-amber-900 text-sm">Appointment Confirmation Pending</p>
+                <p className="text-amber-800 text-xs mt-0.5">{slotValidation.message}</p>
+              </div>
+            </div>
+          )}
+
+          {slotValidation.state === 'STATUS_INVALID' && (
+            <div className="p-4 bg-slate-100 border border-slate-200 rounded-2xl text-xs text-slate-800 flex items-center gap-3 shadow-2xs">
+              <AlertCircle className="w-5 h-5 text-slate-500 shrink-0" />
+              <p className="font-medium">{slotValidation.message}</p>
+            </div>
+          )}
+
+          {slotValidation.state === 'DURING_SLOT' && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-xs text-emerald-950 flex items-center justify-between gap-2 shadow-2xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-bold text-emerald-900">Allotted Slot Window Active</span>
+                <span className="text-emerald-700 hidden sm:inline">— {slotValidation.minutesRemaining} minute{slotValidation.minutesRemaining === 1 ? '' : 's'} remaining</span>
+              </div>
+              <span className="font-mono bg-emerald-100 text-emerald-900 text-[11px] px-2.5 py-0.5 rounded-full font-bold">
+                {slotValidation.formattedTime}
+              </span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* PART 3: Emergency Hospital Guidance Notice */}
+      {userRole === 'patient' && (!slotValidation || !slotValidation.canJoin) && (
+        <div className="p-4 bg-gradient-to-r from-red-50 to-rose-50 border border-red-200 rounded-2xl shadow-2xs text-xs text-red-950 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="font-extrabold text-red-900 text-sm">Emergency Hospital Guidance</p>
+              <p className="text-red-800 text-xs mt-0.5 leading-relaxed">
+                Need immediate medical attention? Do not wait for your scheduled video consultation. Please visit the nearest hospital or emergency department immediately. Video consultations are available only during your allotted appointment slot.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-end md:self-auto">
+            <Link to="/patient/find-hospital">
+              <Button variant="outline" size="sm" icon={Building} className="border-red-300 text-red-700 hover:bg-red-100">
+                Find Nearest Hospital
+              </Button>
+            </Link>
+            <a href="tel:108">
+              <Button variant="primary" size="sm" className="bg-red-600 hover:bg-red-700 text-white">
+                Call Ambulance (108)
+              </Button>
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Main Grid: Video Area & Live Chat/Notes */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         {/* Left/Center: Video Canvas */}
@@ -851,52 +1031,87 @@ export default function WebRTCConsultationRoom({
               ref={remoteVideoRef}
               autoPlay
               playsInline
-              onLoadedMetadata={() => remoteVideoRef.current?.play().catch(() => setAutoplayBlocked(true))}
+              muted
               className={`w-full h-full object-cover ${peerConnected ? 'block' : 'hidden'}`}
             />
 
-            {/* Autoplay deferred interaction recovery */}
-            {autoplayBlocked && (
-              <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-xs flex flex-col items-center justify-center z-25 p-4 text-center">
-                <AlertCircle className="w-8 h-8 text-amber-400 mb-2" />
-                <p className="text-white font-bold text-sm">Remote Clinical Stream Active</p>
-                <p className="text-xs text-slate-300 max-w-xs mt-1 mb-3">
-                  Browser audio/video autoplay policy requires manual interaction to initiate stream playback.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleManualPlayRemote}
-                  className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded-xl font-bold text-xs flex items-center gap-2 cursor-pointer shadow-lg shadow-teal-500/20"
-                >
-                  <Play className="w-4 h-4 fill-white" /> Click to Unmute & Play Video
-                </button>
-              </div>
+            {/* Subtle floating audio unmute pill when browser blocks unmuting before interaction */}
+            {remoteAudioMuted && inCall && peerConnected && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (remoteVideoRef.current) {
+                    remoteVideoRef.current.muted = false;
+                    remoteVideoRef.current.play().catch(() => {});
+                    setRemoteAudioMuted(false);
+                  }
+                }}
+                className="absolute top-4 left-4 z-30 bg-teal-600 hover:bg-teal-500 text-white text-xs px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg transition-all cursor-pointer font-semibold animate-pulse"
+              >
+                <Volume2 className="w-4 h-4" />
+                <span>Tap to Unmute {peerDisplayName}</span>
+              </button>
             )}
 
-            {/* Waiting / Connecting Placeholder */}
+            {/* Waiting / Connecting / Slot Inactive Placeholder */}
             {(!inCall || !peerConnected) && (
-              <div className="text-center p-6 text-white space-y-3 z-10">
+              <div className="text-center p-6 text-white space-y-3 z-10 max-w-md mx-auto">
                 {!inCall ? (
-                  <>
-                    <div className="w-16 h-16 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto text-teal-400">
-                      <Video className="w-7 h-7" />
-                    </div>
-                    <div>
-                      <h4 className="text-base font-bold text-white">Tele-Consultation Ready</h4>
-                      <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                        Click below to enter the secure room. Your camera and microphone will activate.
-                      </p>
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="md"
-                      icon={Video}
-                      onClick={handleStartCall}
-                      disabled={connecting}
-                    >
-                      {connecting ? 'Activating WebRTC...' : 'Join Consultation'}
-                    </Button>
-                  </>
+                  slotValidation && !slotValidation.canJoin ? (
+                    <>
+                      <div className="w-16 h-16 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto text-amber-400">
+                        <Clock className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-bold text-white">
+                          {slotValidation.state === 'BEFORE_SLOT'
+                            ? 'Consultation Slot Not Yet Open'
+                            : slotValidation.state === 'AFTER_SLOT'
+                            ? 'Consultation Slot Concluded'
+                            : 'Consultation Unavailable'}
+                        </h4>
+                        <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
+                          {slotValidation.message}
+                        </p>
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        icon={Clock}
+                        disabled={true}
+                        className="opacity-60 cursor-not-allowed"
+                      >
+                        {slotValidation.state === 'BEFORE_SLOT'
+                          ? `Opens in ${slotValidation.countdownStr}`
+                          : slotValidation.state === 'AFTER_SLOT'
+                          ? 'Appointment Slot Ended'
+                          : 'Room Unavailable'}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-16 h-16 rounded-full bg-slate-800/80 border border-slate-700 flex items-center justify-center mx-auto text-teal-400">
+                        <Video className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h4 className="text-base font-bold text-white">Tele-Consultation Ready</h4>
+                        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                          {slotValidation?.minutesRemaining
+                            ? `Allotted slot window is active (${slotValidation.minutesRemaining} min remaining). Click below to enter.`
+                            : 'Click below to enter the secure room. Your camera and microphone will activate.'}
+                        </p>
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        icon={Video}
+                        onClick={handleStartCall}
+                        disabled={connecting}
+                      >
+                        {connecting ? 'Activating WebRTC...' : 'Join Consultation'}
+                      </Button>
+                    </>
+                  )
                 ) : (
                   <>
                     <Loader2 className="w-10 h-10 text-teal-400 animate-spin mx-auto" />
