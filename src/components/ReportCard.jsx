@@ -10,9 +10,11 @@ import {
   CheckCircle2,
   Clock,
   AlertCircle,
+  Download,
 } from 'lucide-react';
 import Card from './Card';
 import Button from './Button';
+import { reportService } from '../services/reportService';
 
 /**
  * ReportCard
@@ -113,8 +115,18 @@ export default function ReportCard({
         </div>
       </div>
 
-      {/* Primary Actions: [Open Report], [Understand Report] */}
-      <div className="pt-3.5 mt-3.5 border-t border-slate-100 flex items-center justify-end gap-2">
+      {/* Primary Actions: [Download], [Open Report], [Understand Report] */}
+      <div className="pt-3.5 mt-3.5 border-t border-slate-100 flex items-center justify-end gap-2 flex-wrap">
+        <Button
+          variant="outline"
+          size="sm"
+          icon={Download}
+          onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+          title="Download original report file"
+        >
+          Download
+        </Button>
+
         <Button
           variant="outline"
           size="sm"

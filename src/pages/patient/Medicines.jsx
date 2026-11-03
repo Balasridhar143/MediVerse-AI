@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { mockMedicines } from '../../data/mockData';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -9,6 +9,7 @@ import ReminderModal from '../../components/ReminderModal';
 import LanguageSelector from '../../components/LanguageSelector';
 import EasyExplanation from '../../components/EasyExplanation';
 import MedicineDatabaseViewer from '../../components/MedicineDatabaseViewer';
+import api from '../../services/api';
 import {
   Pill,
   Clock,
@@ -54,12 +55,82 @@ export default function Medicines() {
   const [activeModalMed, setActiveModalMed] = useState(null);
   const [snoozeNotice, setSnoozeNotice] = useState('');
   const [escalationNotice, setEscalationNotice] = useState('');
+  const [weeklyAdherenceStats, setWeeklyAdherenceStats] = useState({ taken: 16, skipped: 1, total: 18 });
 
   // Explain Simply toggle (Requirement 3)
   const [explainSimply, setExplainSimply] = useState(true);
 
   // Universal Language Selection (Requirement 4)
   const [selectedLanguage, setSelectedLanguage] = useState('en');
+
+  // Load real prescribed medicines & adherence logs
+  useEffect(() => {
+    loadMedications();
+  }, []);
+
+  const loadMedications = async () => {
+    try {
+      const res = await api.get('/patient/medications');
+      const { prescribed_items = [], today_logs = [], weekly_stats = [] } = res.data || {};
+
+      if (prescribed_items && prescribed_items.length > 0) {
+        const liveMeds = prescribed_items.map((p, idx) => {
+          const timing = p.frequency?.toLowerCase().includes('night') ? 'Night' : 'Morning';
+          const reminderTime = timing === 'Night' ? '09:00 PM' : '08:00 AM';
+          const matchLog = today_logs.find((l) => l.medicine_name.toLowerCase() === p.medicine_name.toLowerCase());
+          let status = 'Pending';
+          if (matchLog) {
+            status = matchLog.status === 'TAKEN' ? 'Taken' : matchLog.status === 'SKIPPED' ? 'Skipped' : 'Pending';
+          }
+
+          return {
+            id: p.id || `rx_med_${idx}`,
+            name: p.medicine_name,
+            dosage: p.dosage || 'Standard dose',
+            slotName: `${timing} Medicine`,
+            frequency: p.frequency || 'Once daily',
+            duration: p.duration || '30 days',
+            timing: timing,
+            mealRelation: p.instructions || 'After meals',
+            reminderTime: reminderTime,
+            instructions: p.instructions || 'Take as advised by prescribing clinician.',
+            status: status,
+            prescribedBy: p.doctor_name || 'Attending Physician',
+            refillRemainingDays: 14,
+          };
+        });
+
+        // Combine live prescribed medicines with baseline
+        setMedicinesList(liveMeds);
+      } else if (today_logs && today_logs.length > 0) {
+        // Sync statuses on mock medicines if logs exist
+        setMedicinesList((prev) =>
+          prev.map((m) => {
+            const found = today_logs.find((l) => l.medicine_name.toLowerCase() === m.name.toLowerCase());
+            if (found) {
+              return {
+                ...m,
+                status: found.status === 'TAKEN' ? 'Taken' : found.status === 'SKIPPED' ? 'Skipped' : m.status
+              };
+            }
+            return m;
+          })
+        );
+      }
+
+      if (weekly_stats && weekly_stats.length > 0) {
+        let taken = 0;
+        let skipped = 0;
+        weekly_stats.forEach((s) => {
+          if (s.status === 'TAKEN') taken += s.count;
+          if (s.status === 'SKIPPED') skipped += s.count;
+        });
+        setWeeklyAdherenceStats({ taken, skipped, total: taken + skipped });
+      }
+    } catch (err) {
+      console.warn('Failed to load live medications from database:', err.message);
+    }
+  };
 
   // Adherence counters (Today)
   const takenCount = medicinesList.filter((m) => m.status === 'Taken').length;
@@ -76,8 +147,8 @@ export default function Medicines() {
     });
   };
 
-  // TAKEN Action
-  const handleTakeMedicine = (id) => {
+  // TAKEN Action (persists to backend database)
+  const handleTakeMedicine = async (id) => {
     setMedicinesList((prev) =>
       prev.map((m) =>
         m.id === id
@@ -93,13 +164,23 @@ export default function Medicines() {
     );
     const med = medicinesList.find((m) => m.id === id);
     if (med) {
+      try {
+        await api.post('/patient/medications/log-dose', {
+          medicine_name: med.name,
+          dosage: med.dosage,
+          slot: med.timing || 'Morning',
+          status: 'TAKEN',
+        });
+      } catch (err) {
+        console.warn('Failed to record dose to server:', err.message);
+      }
       const confirmationMsg = `${med.name} recorded as taken.`;
       triggerVoiceSpeech(confirmationMsg);
     }
   };
 
-  // NOT TAKEN Action
-  const handleSkipMedicine = (id) => {
+  // NOT TAKEN / SKIP Action (persists to backend database)
+  const handleSkipMedicine = async (id) => {
     setMedicinesList((prev) =>
       prev.map((m) =>
         m.id === id
@@ -113,6 +194,19 @@ export default function Medicines() {
           : m
       )
     );
+    const med = medicinesList.find((m) => m.id === id);
+    if (med) {
+      try {
+        await api.post('/patient/medications/log-dose', {
+          medicine_name: med.name,
+          dosage: med.dosage,
+          slot: med.timing || 'Morning',
+          status: 'SKIPPED',
+        });
+      } catch (err) {
+        console.warn('Failed to record skipped dose:', err.message);
+      }
+    }
   };
 
   // REMIND LATER (Snooze - status remains Pending)
@@ -405,20 +499,20 @@ export default function Medicines() {
           <div className="grid grid-cols-3 gap-2.5 text-xs">
             <div className="p-2.5 bg-white border border-slate-200 rounded-xl text-center">
               <span className="text-slate-500 text-[10px] font-bold block uppercase">Taken</span>
-              <span className="text-lg font-black text-emerald-700 block mt-0.5">16</span>
-              <span className="text-[10px] text-emerald-600 font-semibold">91% recorded</span>
+              <span className="text-lg font-black text-emerald-700 block mt-0.5">{weeklyAdherenceStats.taken + takenCount}</span>
+              <span className="text-[10px] text-emerald-600 font-semibold">Active Regimen</span>
             </div>
 
             <div className="p-2.5 bg-white border border-slate-200 rounded-xl text-center">
-              <span className="text-slate-500 text-[10px] font-bold block uppercase">Not Acknowledged</span>
-              <span className="text-lg font-black text-amber-700 block mt-0.5">{notAckCount + 1}</span>
-              <span className="text-[10px] text-amber-600 font-semibold">Re-prompted</span>
+              <span className="text-slate-500 text-[10px] font-bold block uppercase">Skipped / Missed</span>
+              <span className="text-lg font-black text-amber-700 block mt-0.5">{weeklyAdherenceStats.skipped + notTakenCount}</span>
+              <span className="text-[10px] text-amber-600 font-semibold">Self-reported</span>
             </div>
 
             <div className="p-2.5 bg-white border border-slate-200 rounded-xl text-center">
-              <span className="text-slate-500 text-[10px] font-bold block uppercase">Reminded Later</span>
-              <span className="text-lg font-black text-slate-800 block mt-0.5">1</span>
-              <span className="text-[10px] text-slate-500 font-semibold">Snoozed</span>
+              <span className="text-slate-500 text-[10px] font-bold block uppercase">Pending Today</span>
+              <span className="text-lg font-black text-slate-800 block mt-0.5">{pendingCount}</span>
+              <span className="text-[10px] text-slate-500 font-semibold">Scheduled</span>
             </div>
           </div>
         </div>

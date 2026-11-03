@@ -18,6 +18,9 @@ import {
   HelpCircle,
   Stethoscope,
   Clock,
+  Download,
+  ExternalLink,
+  FileText,
 } from 'lucide-react';
 import Button from './Button';
 import ReportOverview from './ReportOverview';
@@ -29,6 +32,7 @@ import VoiceExplanation from './VoiceExplanation';
 import UniversalLanguageSelector from './LanguageSelector';
 import { getLanguageConfig } from '../utils/languageRegistry';
 import { getUiText, getReportTranslation } from '../data/medicalTranslations';
+import { reportService } from '../services/reportService';
 
 /**
  * ReportReader
@@ -92,7 +96,7 @@ export default function ReportReader({
                 </span>
                 <span className="text-slate-300">·</span>
                 <span className="text-xs text-slate-500 font-medium">
-                  Patient: <strong className="text-slate-800">Rahul Sharma</strong>
+                  Patient: <strong className="text-slate-800">{report.patientName || 'Patient Record'}</strong>
                 </span>
               </div>
               <h1 className="text-lg sm:text-xl font-extrabold text-slate-900">
@@ -101,6 +105,17 @@ export default function ReportReader({
             </div>
 
             <div className="flex items-center gap-2 self-start sm:self-center">
+              {(report.fileData || report.id) && (
+                <button
+                  type="button"
+                  onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold transition-all cursor-pointer shadow-2xs"
+                  title="Download or open original uploaded document"
+                >
+                  <Download className="w-3.5 h-3.5 text-teal-700" />
+                  <span>Download File</span>
+                </button>
+              )}
               <button
                 onClick={onClose}
                 className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 cursor-pointer"
@@ -222,6 +237,35 @@ export default function ReportReader({
         {/* SCROLLABLE REPORT BODY */}
         {/* ==================================================== */}
         <div className="p-5 overflow-y-auto space-y-6 text-xs">
+          {/* Document File / Image Preview & Download Banner */}
+          {report.fileData && (
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span className="font-bold text-slate-800">
+                    Original Document: <span className="text-teal-800">{report.fileName || 'Diagnostic Report'}</span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+                  className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download / Open Original</span>
+                </button>
+              </div>
+
+              {/* If image data is present, show preview */}
+              {(report.fileData.startsWith('data:image') || report.fileType?.includes('image')) && (
+                <div className="mt-2 p-2 bg-white rounded-lg border border-slate-200 flex justify-center max-h-64 overflow-auto">
+                  <img src={report.fileData} alt={report.reportName} className="max-h-56 object-contain rounded" />
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Easy mode banner */}
           {viewMode === 'easy' && (
             <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl flex items-center justify-between gap-2 text-teal-950 font-medium">

@@ -46,6 +46,12 @@ export default function DoctorDashboard() {
   const [rejectReason, setRejectReason] = useState('Clinician schedule conflict');
   const [actionLoadingId, setActionLoadingId] = useState(null);
 
+  // Acceptance & Scheduling modal state (60-minute consultation slot)
+  const [acceptModalOpen, setAcceptModalOpen] = useState(false);
+  const [acceptingApt, setAcceptingApt] = useState(null);
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('10:00 AM');
+
   const fetchDoctorData = async () => {
     setLoading(true);
     setError(null);
@@ -91,21 +97,47 @@ export default function DoctorDashboard() {
     }
   }, [targetAptId, appointments]);
 
-  const handleAccept = async (id) => {
-    setActionLoadingId(id);
+  const handleOpenAccept = (apt) => {
+    setAcceptingApt(apt);
+    setScheduledDate(apt.date || new Date().toISOString().split('T')[0]);
+    setScheduledTime(apt.time || '10:00 AM');
+    setAcceptModalOpen(true);
+  };
+
+  const handleConfirmAccept = async (e) => {
+    e.preventDefault();
+    if (!acceptingApt) return;
+    const aptId = acceptingApt.id;
+    setActionLoadingId(aptId);
     try {
-      await appointmentService.acceptAppointment(id);
+      await appointmentService.acceptAppointment(aptId, {
+        appointment_date: scheduledDate,
+        time_slot: scheduledTime,
+      });
       setAppointments((prev) =>
-        prev.map((apt) => (apt.id === id ? { ...apt, status: 'CONFIRMED' } : apt))
+        prev.map((apt) =>
+          apt.id === aptId
+            ? { ...apt, status: 'CONFIRMED', date: scheduledDate, time: scheduledTime }
+            : apt
+        )
       );
+      setAcceptModalOpen(false);
+      setAcceptingApt(null);
       // Refresh stats
       doctorService.getDoctorStats().then((res) => {
         if (res) setStats((prev) => ({ ...prev, ...res }));
       }).catch(() => {});
     } catch (err) {
-      alert(err.response?.data?.detail || 'Failed to accept appointment.');
+      alert(err.response?.data?.detail || 'Failed to confirm and schedule appointment.');
     } finally {
       setActionLoadingId(null);
+    }
+  };
+
+  const handleAccept = async (id) => {
+    const apt = appointments.find((a) => a.id === id);
+    if (apt) {
+      handleOpenAccept(apt);
     }
   };
 
@@ -322,7 +354,7 @@ export default function DoctorDashboard() {
                         size="sm"
                         disabled={actionLoadingId === apt.id}
                         icon={Check}
-                        onClick={() => handleAccept(apt.id)}
+                        onClick={() => handleOpenAccept(apt)}
                       >
                         {actionLoadingId === apt.id ? 'Confirming...' : 'Accept Request'}
                       </Button>
@@ -461,6 +493,82 @@ export default function DoctorDashboard() {
               disabled={actionLoadingId === rejectingAptId}
             >
               {actionLoadingId === rejectingAptId ? 'Declining...' : 'Confirm Decline'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Accept & Schedule 60-Minute Consultation Modal */}
+      <Modal
+        isOpen={acceptModalOpen}
+        onClose={() => setAcceptModalOpen(false)}
+        title="Accept & Schedule 1-Hour Consultation"
+        description="Verify or adjust the scheduled consultation date and start time. Video consultation will be allotted for a 60-minute window."
+      >
+        <form onSubmit={handleConfirmAccept} className="space-y-4 text-xs">
+          {acceptingApt && (
+            <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg space-y-1">
+              <div className="flex justify-between">
+                <span className="font-bold text-teal-900">Patient:</span>
+                <span className="font-semibold text-slate-800">{acceptingApt.patientName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold text-teal-900">Chief Complaint:</span>
+                <span className="text-slate-700 truncate max-w-xs">{acceptingApt.chiefComplaint || 'Consultation assessment'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="font-bold text-teal-900">Mode:</span>
+                <span className="text-teal-700 font-semibold">{acceptingApt.type}</span>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="block font-medium text-slate-700 mb-1">Appointment Date</label>
+            <input
+              type="date"
+              required
+              value={scheduledDate}
+              onChange={(e) => setScheduledDate(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-xs"
+            />
+          </div>
+
+          <div>
+            <label className="block font-medium text-slate-700 mb-1">Start Time Slot (60-minute duration)</label>
+            <select
+              value={scheduledTime}
+              onChange={(e) => setScheduledTime(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-xs"
+            >
+              <option value="09:00 AM">09:00 AM (09:00 AM - 10:00 AM)</option>
+              <option value="10:00 AM">10:00 AM (10:00 AM - 11:00 AM)</option>
+              <option value="11:00 AM">11:00 AM (11:00 AM - 12:00 PM)</option>
+              <option value="12:00 PM">12:00 PM (12:00 PM - 01:00 PM)</option>
+              <option value="02:00 PM">02:00 PM (02:00 PM - 03:00 PM)</option>
+              <option value="03:00 PM">03:00 PM (03:00 PM - 04:00 PM)</option>
+              <option value="04:00 PM">04:00 PM (04:00 PM - 05:00 PM)</option>
+              <option value="05:00 PM">05:00 PM (05:00 PM - 06:00 PM)</option>
+              <option value="06:00 PM">06:00 PM (06:00 PM - 07:00 PM)</option>
+            </select>
+          </div>
+
+          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 text-[11px] flex items-center gap-1.5">
+            <Clock className="w-4 h-4 text-teal-600 shrink-0" />
+            <span>Consultation window: 60 minutes. System validates against schedule conflicts before confirmation.</span>
+          </div>
+
+          <div className="pt-2 flex justify-between">
+            <Button variant="outline" size="sm" onClick={() => setAcceptModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={actionLoadingId === acceptingApt?.id}
+            >
+              {actionLoadingId === acceptingApt?.id ? 'Scheduling...' : 'Confirm & Schedule 1-Hour Consultation'}
             </Button>
           </div>
         </form>

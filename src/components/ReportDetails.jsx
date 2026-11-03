@@ -15,6 +15,7 @@ import {
 import Button from './Button';
 import StatusBadge from './StatusBadge';
 import VoiceExplanation from './VoiceExplanation';
+import { reportService } from '../services/reportService';
 
 /**
  * ReportDetails
@@ -165,11 +166,11 @@ export default function ReportDetails({
             </div>
           )}
 
-          {/* Safety Notice */}
+          {/* Clinical Record Notice */}
           <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-500 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
+            <AlertCircle className="w-4 h-4 text-teal-600 shrink-0" />
             <span>
-              Sample data for frontend demonstration. Original report values are preserved without automated diagnostic modifications.
+              Original clinical laboratory observations and reference bounds are securely preserved in your digital medical records.
             </span>
           </div>
         </div>
@@ -185,6 +186,16 @@ export default function ReportDetails({
           </div>
 
           <div className="flex items-center gap-2 justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              icon={Download}
+              onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+              title="Download original report file"
+            >
+              DOWNLOAD FILE
+            </Button>
+
             <Button variant="outline" size="sm" onClick={onClose}>
               CLOSE
             </Button>

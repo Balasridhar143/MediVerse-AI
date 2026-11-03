@@ -25,6 +25,7 @@ import {
   Calendar,
   Layers,
   ArrowRight,
+  Download,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -37,6 +38,7 @@ import {
 } from 'recharts';
 import { mockVitalsHistory, mockMedicines } from '../../data/mockData';
 import { reportService } from '../../services/reportService';
+import api from '../../services/api';
 
 export default function ClinicalContext() {
   const [reportsList, setReportsList] = useState([]);
@@ -44,15 +46,30 @@ export default function ClinicalContext() {
   const [noteModalReport, setNoteModalReport] = useState(null);
   const [noteText, setNoteText] = useState('');
   const [reviewedNotice, setReviewedNotice] = useState('');
+  const [adherenceLogs, setAdherenceLogs] = useState([]);
+
+  const currentPatientName = reportsList[0]?.patientName || 'Rahul Sharma';
 
   React.useEffect(() => {
     reportService.getReports().then((data) => setReportsList(data || []));
+    api.get('/patient/medications')
+      .then((res) => {
+        if (res.data?.today_logs) {
+          setAdherenceLogs(res.data.today_logs);
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  const handleMarkAsReviewed = (reportId) => {
+  const handleMarkAsReviewed = async (reportId) => {
+    try {
+      await reportService.reviewReport(reportId, { status: 'Doctor Reviewed' });
+    } catch (e) {
+      console.warn('Failed to persist review status:', e.message);
+    }
     setReportsList((prev) =>
       prev.map((r) =>
-        r.id === reportId ? { ...r, status: 'Doctor Reviewed' } : r
+        r.id === reportId ? { ...r, status: 'Doctor Reviewed', doctorReviewStatus: 'Doctor Reviewed' } : r
       )
     );
     const rep = reportsList.find((r) => r.id === reportId);
@@ -60,9 +77,17 @@ export default function ClinicalContext() {
     setTimeout(() => setReviewedNotice(''), 4000);
   };
 
-  const handleSaveNote = (e) => {
+  const handleSaveNote = async (e) => {
     e.preventDefault();
     if (!noteModalReport) return;
+    try {
+      await reportService.reviewReport(noteModalReport.id, {
+        status: noteModalReport.status || 'Doctor Reviewed',
+        doctorNotes: noteText
+      });
+    } catch (e) {
+      console.warn('Failed to persist clinical note:', e.message);
+    }
     setReportsList((prev) =>
       prev.map((r) =>
         r.id === noteModalReport.id
@@ -81,7 +106,7 @@ export default function ClinicalContext() {
         badge="Clinical Synthesis"
         badgeStatus="Doctor Review Required"
         title="Patient Clinical Context"
-        subtitle="Evaluating Patient: Rahul Sharma (PID-2026-089) • 42y / Male • Stage 1 Hypertension"
+        subtitle={`Evaluating Patient: ${currentPatientName} • Adult Medical Record • Clinical Decision Support`}
         action={
           <div className="flex items-center gap-2">
             <Link to="/doctor/health-trends">
@@ -163,7 +188,7 @@ export default function ClinicalContext() {
           <div className="space-y-2 text-xs text-slate-600">
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Patient:</span>
-              <strong className="text-slate-900">Rahul Sharma</strong>
+              <strong className="text-slate-900">{currentPatientName}</strong>
             </div>
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">ID / Age:</span>
@@ -293,7 +318,7 @@ export default function ClinicalContext() {
                       </h4>
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Patient: <strong className="text-slate-700">Rahul Sharma</strong> • Date: <strong>{report.date}</strong> • Lab: {report.hospital}
+                      Patient: <strong className="text-slate-700">{report.patientName || 'Rahul Sharma'}</strong> • Date: <strong>{report.date}</strong> • Lab: {report.hospital}
                     </p>
                   </div>
 
@@ -344,8 +369,18 @@ export default function ClinicalContext() {
                   </div>
                 )}
 
-                {/* Action Buttons: [VIEW REPORT], [ADD NOTE], [MARK AS REVIEWED] */}
+                {/* Action Buttons: [DOWNLOAD FILE], [VIEW REPORT], [ADD NOTE], [MARK AS REVIEWED] */}
                 <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center justify-end gap-2 text-xs">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={Download}
+                    onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+                    title="Download original uploaded report"
+                  >
+                    DOWNLOAD FILE
+                  </Button>
+
                   <Button
                     variant="outline"
                     size="sm"

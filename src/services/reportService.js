@@ -42,6 +42,11 @@ const normalizeDbReport = (r) => {
     date: r.date || (r.created_at ? r.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
     status: r.status || 'Ready',
     fileName: r.file_name || 'report.pdf',
+    fileType: r.file_type || 'application/pdf',
+    fileData: r.file_data || null,
+    hasFile: Boolean(r.has_file || r.file_data),
+    doctorReviewStatus: r.doctor_review_status || (r.status === 'Doctor Reviewed' ? 'Doctor Reviewed' : 'Pending Review'),
+    doctorNotes: r.doctor_notes || '',
     parameters: normalizedParams,
     rag_citations: r.rag_citations || [],
     aiExplanation: {
@@ -206,6 +211,59 @@ export const reportService = {
       report2: rep2,
       comparison: comparisonRows
     };
+  },
+
+  /**
+   * Triggers download of the original uploaded PDF or image file
+   */
+  async downloadReportFile(reportId, preferredFileName = 'diagnostic_report.pdf') {
+    try {
+      // First fetch report details to get fileData if available
+      const report = await this.getReportById(reportId);
+      if (report && report.fileData) {
+        const link = document.createElement('a');
+        link.href = report.fileData;
+        link.download = report.fileName || preferredFileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return true;
+      }
+
+      // Direct endpoint download fallback
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/reports/${reportId}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!response.ok) throw new Error('Download request failed');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = report?.fileName || preferredFileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      return true;
+    } catch (err) {
+      console.error('Failed to download report file:', err);
+      // Fallback: window.open
+      window.open(`/api/reports/${reportId}/download`, '_blank');
+      return false;
+    }
+  },
+
+  /**
+   * Clinician marks report as reviewed and saves notes
+   */
+  async reviewReport(reportId, { status = 'Doctor Reviewed', doctorNotes = '' } = {}) {
+    const res = await api.post(`/reports/${reportId}/review`, {
+      status,
+      doctor_notes: doctorNotes
+    });
+    return res.data;
   }
 };
 

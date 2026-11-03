@@ -258,7 +258,8 @@ export const CLINICAL_LAB_TEST_DICTIONARY = [
 ];
 
 /**
- * Extracts raw text from uploaded PDF or text buffer.
+ * Extracts raw text from uploaded PDF, image, or text buffer.
+ * Supports PDF parsing via pdf-parse and multimodal OCR via @google/genai if GEMINI_API_KEY is present.
  */
 export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
   if (!fileBuffer || fileBuffer.length === 0) {
@@ -266,7 +267,35 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
   }
 
   const isPdf = (mimeType && mimeType.includes('pdf')) || (filename && filename.toLowerCase().endsWith('.pdf'));
+  const isImage = (mimeType && (mimeType.includes('image') || mimeType.includes('jpeg') || mimeType.includes('png') || mimeType.includes('jpg'))) ||
+    (filename && /\.(jpe?g|png|webp|gif|bmp)$/i.test(filename));
 
+  // 1. Try Gemini Multimodal Vision / OCR if API key is provided in environment
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  if (geminiApiKey && (isImage || isPdf)) {
+    try {
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+      const prompt = "Extract all text, laboratory test names, numerical values, measurement units, and reference intervals verbatim from this diagnostic medical report. Output the extracted text clearly.";
+      const mediaPart = {
+        inlineData: {
+          data: fileBuffer.toString('base64'),
+          mimeType: mimeType || (isPdf ? 'application/pdf' : 'image/png')
+        }
+      };
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: [prompt, mediaPart]
+      });
+      if (response && response.text && response.text.trim().length > 10) {
+        return response.text.trim();
+      }
+    } catch (geminiErr) {
+      console.warn('[Gemini Vision OCR] Optical recognition notice:', geminiErr.message);
+    }
+  }
+
+  // 2. Standard PDF text extraction
   if (isPdf) {
     try {
       const parseFn = typeof pdfParse === 'function' ? pdfParse : (pdfParse && pdfParse.default);
@@ -278,16 +307,20 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
       }
     } catch (e) {
       console.warn('[PDF Parser] Standard pdf-parse failed, attempting fallback raw string extraction:', e.message);
-      // Fallback text extraction from buffer
       const text = fileBuffer.toString('utf8');
       const clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ');
       return clean.slice(0, 50000);
     }
   }
 
-  // If image or plaintext
-  const text = fileBuffer.toString('utf8');
-  return text.slice(0, 50000);
+  // 3. Fallback extraction of printable strings from buffer
+  const rawStr = fileBuffer.toString('utf8');
+  const printable = rawStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (printable.length > 20 && /[a-zA-Z]{3,}/.test(printable)) {
+    return printable.slice(0, 50000);
+  }
+
+  return "";
 }
 
 /**
@@ -437,45 +470,6 @@ export async function executeMedicalReportRAGPipeline({
   // 2. Entity & Value Extraction + Reference Range Comparison
   let testResults = extractAndCompareLabEntities(extractedText);
 
-  // If completely empty (e.g. image file with no readable text in headless env), generate accurate clinical panel based on report type
-  if (testResults.length === 0) {
-    testResults = [
-      {
-        test_name: "Hemoglobin",
-        patient_value: 13.5,
-        unit: "g/dL",
-        reference_range: "12.0 - 17.0 g/dL",
-        status: "Normal",
-        is_critical: false,
-        meaning: "Oxygen-carrying iron-rich protein in red blood cells that transports oxygen from the lungs to body tissues.",
-        possible_reasons: "Healthy bone marrow synthesis and adequate nutritional iron balance.",
-        explanation: "Hemoglobin (13.5 g/dL) is within normal clinical physiological bounds (12.0 - 17.0 g/dL)."
-      },
-      {
-        test_name: "Fasting Blood Sugar (Glucose)",
-        patient_value: 94.0,
-        unit: "mg/dL",
-        reference_range: "70.0 - 99.0 mg/dL",
-        status: "Normal",
-        is_critical: false,
-        meaning: "Circulating glucose concentration following an overnight fast of at least 8 hours.",
-        possible_reasons: "Healthy insulin sensitivity and glucose homeostasis.",
-        explanation: "Fasting glucose (94.0 mg/dL) is within recommended normal non-diabetic bounds."
-      },
-      {
-        test_name: "Serum Creatinine",
-        patient_value: 0.95,
-        unit: "mg/dL",
-        reference_range: "0.70 - 1.30 mg/dL",
-        status: "Normal",
-        is_critical: false,
-        meaning: "Muscle metabolism waste product cleared entirely by the glomeruli of healthy kidneys.",
-        possible_reasons: "Intact glomerular filtration rate and normal renal clearance.",
-        explanation: "Serum creatinine (0.95 mg/dL) indicates intact renal excretory function."
-      }
-    ];
-  }
-
   // 3. RAG Knowledge Retrieval
   const ragSources = retrieveRAGKnowledge(extractedText, testResults, 3);
 
@@ -485,9 +479,14 @@ export async function executeMedicalReportRAGPipeline({
   const criticalCount = testResults.filter(t => t.is_critical).length;
 
   const abnormalItems = testResults.filter(t => t.status !== "Normal");
-  const findingsSummary = abnormalCount === 0
-    ? "All analyzed parameters fall within established reference ranges."
-    : `${abnormalCount} parameter(s) are outside standard reference intervals (${abnormalItems.map(a => `${a.test_name}: ${a.status}`).join(', ')}).`;
+  let findingsSummary = "";
+  if (testResults.length === 0) {
+    findingsSummary = "Document uploaded and securely archived in digital medical records. Quantitative laboratory parameters could not be automatically parsed from this file layer. Original file is preserved for clinician review.";
+  } else if (abnormalCount === 0) {
+    findingsSummary = "All analyzed parameters fall within established reference ranges.";
+  } else {
+    findingsSummary = `${abnormalCount} parameter(s) are outside standard reference intervals (${abnormalItems.map(a => `${a.test_name}: ${a.status}`).join(', ')}).`;
+  }
 
   // 5. Medical Recommendations (Cautious, Evidence-Based)
   const recommendations = [];
@@ -497,8 +496,13 @@ export async function executeMedicalReportRAGPipeline({
   if (abnormalCount > 0) {
     recommendations.push("Schedule a follow-up consultation with your attending medical doctor to correlate these laboratory findings with your physical symptoms and history.");
   }
-  recommendations.push("Do not start, stop, or adjust prescription dosages independently based on these laboratory values alone.");
-  recommendations.push("Maintain standard hydration and bring previous historical lab reports to your appointment for longitudinal trend analysis.");
+  if (testResults.length === 0) {
+    recommendations.push("The original uploaded document is stored securely in your medical records and can be opened or downloaded anytime.");
+    recommendations.push("Share this document directly with your attending physician during consultation for clinical evaluation.");
+  } else {
+    recommendations.push("Do not start, stop, or adjust prescription dosages independently based on these laboratory values alone.");
+    recommendations.push("Maintain standard hydration and bring previous historical lab reports to your appointment for longitudinal trend analysis.");
+  }
 
   // Questions for doctor
   const doctorDiscussionQuestions = [
@@ -507,10 +511,12 @@ export async function executeMedicalReportRAGPipeline({
     "When should I schedule the next routine follow-up or repeat diagnostic panel?"
   ];
 
-  const overallSummary = `This ${reportType} was processed using Mediverse AI's clinical RAG pipeline. ` +
-    `A total of ${testResults.length} test parameter(s) were extracted and evaluated against clinical reference manuals. ` +
-    `${normalCount} parameter(s) are within normal physiological bounds, and ${abnormalCount} parameter(s) warrant clinical review. ` +
-    findingsSummary;
+  const overallSummary = testResults.length === 0
+    ? `This ${reportType} document was uploaded and securely recorded in patient medical records. The original document is available for direct clinical review and download.`
+    : `This ${reportType} was processed using Mediverse AI's clinical RAG pipeline. ` +
+      `A total of ${testResults.length} test parameter(s) were extracted and evaluated against clinical reference manuals. ` +
+      `${normalCount} parameter(s) are within normal physiological bounds, and ${abnormalCount} parameter(s) warrant clinical review. ` +
+      findingsSummary;
 
   return {
     parameters: testResults,

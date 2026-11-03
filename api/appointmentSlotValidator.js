@@ -36,13 +36,9 @@ export function parseTimeSlotString(timeSlotStr) {
     end = parseSingleTime(parts[1]);
     isRange = true;
   } else {
-    // Standard allotted consultation slot duration: 30 minutes
-    let endMin = start.minute + 30;
-    let endHr = start.hour;
-    if (endMin >= 60) {
-      endHr = (endHr + Math.floor(endMin / 60)) % 24;
-      endMin = endMin % 60;
-    }
+    // Standard allotted consultation slot duration: 60 minutes (1 hour)
+    let endMin = start.minute;
+    let endHr = (start.hour + 1) % 24;
     end = { hour: endHr, minute: endMin };
   }
 

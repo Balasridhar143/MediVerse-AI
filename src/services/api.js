@@ -650,8 +650,8 @@ export const appointmentService = {
     return res.data;
   },
 
-  async acceptAppointment(id) {
-    const res = await api.patch(`/appointments/${id}/accept`);
+  async acceptAppointment(id, schedule = {}) {
+    const res = await api.patch(`/appointments/${id}/accept`, schedule);
     return res.data;
   },
 

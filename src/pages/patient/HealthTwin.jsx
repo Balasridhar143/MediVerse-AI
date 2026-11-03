@@ -5,6 +5,8 @@ import {
   mockFollowUps,
 } from '../../data/mockData';
 import { reportService } from '../../services/reportService';
+import { useAuth } from '../../context/AuthContext';
+import api from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import StatusBadge from '../../components/StatusBadge';
@@ -35,11 +37,42 @@ import {
  * Designed strictly as a structured clinical summary avoiding sci-fi 3D digital human aesthetics.
  */
 export default function HealthTwin() {
+  const { user } = useAuth();
   const [reports, setReports] = useState([]);
+  const [medications, setMedications] = useState(mockMedicines);
+  const [allergiesList, setAllergiesList] = useState([]);
 
   useEffect(() => {
     reportService.getReports().then((data) => setReports(data || []));
-  }, []);
+
+    api.get('/patient/medications')
+      .then((res) => {
+        if (res.data?.prescribed_items && res.data.prescribed_items.length > 0) {
+          const liveMeds = res.data.prescribed_items.map((p, idx) => ({
+            id: p.id || `live_${idx}`,
+            name: p.medicine_name,
+            dosage: p.dosage || 'As prescribed',
+            frequency: p.frequency || 'Daily',
+            mealRelation: p.instructions || 'With water',
+          }));
+          setMedications(liveMeds);
+        }
+      })
+      .catch(() => {});
+
+    if (user?.id) {
+      api.get(`/patients/${user.id}/allergies`)
+        .then((res) => {
+          if (res.data?.knownAllergies) {
+            setAllergiesList(res.data.knownAllergies);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [user]);
+
+  const patientDisplayName = user?.full_name || user?.name || 'Rahul Sharma';
+  const patientIdentifier = user?.id ? `PID-${user.id.slice(-6).toUpperCase()}` : 'PID-2026-089';
 
   return (
     <div className="space-y-6">
@@ -63,11 +96,11 @@ export default function HealthTwin() {
           <div className="space-y-2 text-xs text-slate-600">
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Full Name:</span>
-              <strong className="text-slate-900">Rahul Sharma</strong>
+              <strong className="text-slate-900">{patientDisplayName}</strong>
             </div>
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Patient Identifier:</span>
-              <strong className="text-slate-900">PID-2026-089</strong>
+              <strong className="text-slate-900">{patientIdentifier}</strong>
             </div>
             <div className="flex justify-between py-1 border-b border-slate-100">
               <span className="text-slate-400">Age / Gender:</span>
@@ -111,7 +144,7 @@ export default function HealthTwin() {
             </div>
 
             <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs flex items-center justify-between">
-              <span>Known Drug Allergies: <strong>Penicillin (Causes cutaneous urticaria)</strong></span>
+              <span>Known Drug Allergies: <strong>{allergiesList.length > 0 ? allergiesList.map(a => `${a.allergen} (${a.reaction || 'Reaction'})`).join(', ') : 'Penicillin (Causes cutaneous urticaria)'}</strong></span>
               <StatusBadge status="Allergy Flagged" size="xs" />
             </div>
           </div>
@@ -183,7 +216,7 @@ export default function HealthTwin() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card title="Current Medications" icon={Pill}>
           <div className="space-y-2 text-xs">
-            {mockMedicines.map((m) => (
+            {medications.slice(0, 4).map((m) => (
               <div key={m.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
                 <div className="flex justify-between font-semibold text-slate-800">
                   <span>{m.name}</span>

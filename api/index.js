@@ -439,6 +439,18 @@ async function ensureTables(sql) {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_type') THEN
           ALTER TABLE medical_reports ADD COLUMN file_type VARCHAR(64);
         END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_data') THEN
+          ALTER TABLE medical_reports ADD COLUMN file_data TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='original_filename') THEN
+          ALTER TABLE medical_reports ADD COLUMN original_filename VARCHAR(256);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='doctor_review_status') THEN
+          ALTER TABLE medical_reports ADD COLUMN doctor_review_status VARCHAR(64) DEFAULT 'Pending Review';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='doctor_notes') THEN
+          ALTER TABLE medical_reports ADD COLUMN doctor_notes TEXT;
+        END IF;
       END $$;
     `;
 
@@ -460,6 +472,22 @@ async function ensureTables(sql) {
     await sql`CREATE INDEX IF NOT EXISTS idx_dpr_doctor ON doctor_patient_relationships(doctor_id);`;
     await sql`ALTER TABLE doctor_patient_relationships ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'ACTIVE';`;
     await sql`ALTER TABLE doctor_patient_relationships ADD COLUMN IF NOT EXISTS notes TEXT;`;
+
+    // 12b. Medication Adherence Logs
+    await sql`
+      CREATE TABLE IF NOT EXISTS medication_adherence_logs (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL,
+        medicine_name VARCHAR(128) NOT NULL,
+        dosage VARCHAR(64),
+        slot VARCHAR(32) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        log_date VARCHAR(32) NOT NULL,
+        notes TEXT,
+        logged_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_med_adherence_user_date ON medication_adherence_logs(user_id, log_date);`;
 
     // 13. Audit Logs
     await sql`
@@ -1592,7 +1620,10 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
         reports = await sql`
           SELECT r.id, r.user_id, r.patient_id, r.patient_name, r.report_name, r.report_type,
                  r.hospital, r.doctor, r.status, r.date, r.parameters, r.structured_data,
-                 r.ai_explanation, r.rag_citations, r.file_name, r.file_size, r.file_type, r.created_at
+                 r.ai_explanation, r.rag_citations, r.file_name, r.file_size, r.file_type,
+                 r.doctor_review_status, r.doctor_notes,
+                 (CASE WHEN r.file_data IS NOT NULL THEN true ELSE false END) as has_file,
+                 r.created_at
           FROM medical_reports r
           JOIN doctor_patient_relationships dpr ON r.user_id = dpr.patient_id
           WHERE dpr.doctor_id = ${user.id} AND dpr.access_status = 'GRANTED'
@@ -1603,7 +1634,10 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
         reports = await sql`
           SELECT id, user_id, patient_id, patient_name, report_name, report_type,
                  hospital, doctor, status, date, parameters, structured_data,
-                 ai_explanation, rag_citations, file_name, file_size, file_type, created_at
+                 ai_explanation, rag_citations, file_name, file_size, file_type,
+                 doctor_review_status, doctor_notes,
+                 (CASE WHEN file_data IS NOT NULL THEN true ELSE false END) as has_file,
+                 created_at
           FROM medical_reports
           ORDER BY created_at DESC
           LIMIT 100;
@@ -1613,12 +1647,28 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
         reports = await sql`
           SELECT id, user_id, patient_id, patient_name, report_name, report_type,
                  hospital, doctor, status, date, parameters, structured_data,
-                 ai_explanation, rag_citations, file_name, file_size, file_type, created_at
+                 ai_explanation, rag_citations, file_name, file_size, file_type,
+                 doctor_review_status, doctor_notes,
+                 (CASE WHEN file_data IS NOT NULL THEN true ELSE false END) as has_file,
+                 created_at
           FROM medical_reports
           WHERE user_id = ${user.id}
           ORDER BY created_at DESC;
         `;
       }
+    } else {
+      // Unauthenticated / development preview: return recent reports
+      reports = await sql`
+        SELECT id, user_id, patient_id, patient_name, report_name, report_type,
+               hospital, doctor, status, date, parameters, structured_data,
+               ai_explanation, rag_citations, file_name, file_size, file_type,
+               doctor_review_status, doctor_notes,
+               (CASE WHEN file_data IS NOT NULL THEN true ELSE false END) as has_file,
+               created_at
+        FROM medical_reports
+        ORDER BY created_at DESC
+        LIMIT 20;
+      `;
     }
 
     return res.json(reports);
@@ -1648,7 +1698,8 @@ app.get(['/reports/:id', '/api/reports/:id'], async (req, res) => {
     const rows = await sql`
       SELECT id, user_id, patient_id, patient_name, report_name, report_type,
              hospital, doctor, status, date, parameters, structured_data,
-             ai_explanation, extracted_text, rag_citations, file_name, file_size, file_type, created_at
+             ai_explanation, extracted_text, rag_citations, file_name, file_size, file_type,
+             file_data, original_filename, doctor_review_status, doctor_notes, created_at
       FROM medical_reports
       WHERE id = ${id}
       LIMIT 1;
@@ -1809,7 +1860,8 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
         id, user_id, patient_name, report_name, report_type,
         hospital, doctor, status, date,
         parameters, structured_data, ai_explanation,
-        extracted_text, rag_citations, file_name, file_size, file_type, created_at
+        extracted_text, rag_citations, file_name, file_size, file_type,
+        file_data, original_filename, doctor_review_status, created_at
       ) VALUES (
         ${reportId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
         ${hospital}, ${doctor}, 'Ready', ${todayStr},
@@ -1821,6 +1873,9 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
         ${file_name},
         ${file_size || (fileBuffer ? fileBuffer.length : 0)},
         ${file_type},
+        ${file_data || null},
+        ${file_name},
+        'Pending Review',
         NOW()
       );
     `;
@@ -1861,6 +1916,8 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
         ai_explanation: ragAnalysis.ai_explanation,
         rag_citations: ragAnalysis.rag_citations,
         file_name,
+        file_data,
+        doctor_review_status: 'Pending Review',
         created_at: new Date().toISOString()
       },
       rag_analysis: ragAnalysis
@@ -1868,6 +1925,85 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
   } catch (err) {
     console.error('Report analyze error:', err);
     return res.status(500).json({ detail: `Medical Report RAG analysis failed: ${err.message}` });
+  }
+});
+
+// Download original report file
+app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, report_name, file_name, file_type, file_data
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0 || !rows[0].file_data) {
+      return res.status(404).json({ detail: 'Document file not found for this medical report.' });
+    }
+
+    const rep = rows[0];
+    const mimeType = rep.file_type || 'application/pdf';
+    const filename = rep.file_name || `${rep.report_name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+
+    const base64Content = rep.file_data.replace(/^data:[^;]+;base64,/, '');
+    const buffer = Buffer.from(base64Content, 'base64');
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    return res.end(buffer);
+  } catch (err) {
+    console.error('Download report error:', err);
+    return res.status(500).json({ detail: `Failed to download document: ${err.message}` });
+  }
+});
+
+// Doctor review of report
+app.post(['/reports/:id/review', '/api/reports/:id/review'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status = 'Doctor Reviewed', doctor_notes = '' } = req.body;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const existing = await sql`SELECT id, user_id, report_name FROM medical_reports WHERE id = ${id} LIMIT 1;`;
+    if (existing.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    await sql`
+      UPDATE medical_reports
+      SET doctor_review_status = ${status},
+          doctor_notes = ${doctor_notes},
+          status = ${status}
+      WHERE id = ${id};
+    `;
+
+    // Notify patient
+    if (existing[0].user_id) {
+      const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
+      const notifMsg = `Your attending clinician updated review notes for "${existing[0].report_name}".`;
+      await sql`
+        INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
+        VALUES (${notifId}, ${existing[0].user_id}, 'REPORT_REVIEWED', 'Report Reviewed by Doctor', ${notifMsg}, ${id}, ${'/patient/reports?id=' + id}, FALSE, NOW());
+      `;
+    }
+
+    return res.json({
+      success: true,
+      id,
+      doctor_review_status: status,
+      doctor_notes,
+      message: 'Clinical report review and notes updated successfully.'
+    });
+  } catch (err) {
+    console.error('Report review error:', err);
+    return res.status(500).json({ detail: `Failed to save review: ${err.message}` });
   }
 });
 
@@ -2769,6 +2905,7 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
   try {
     const doctorUserId = req.user.sub || req.user.id;
     const { id } = req.params;
+    const { appointment_date, time_slot } = req.body || {};
     const sql = getDb();
     await ensureTables(sql);
 
@@ -2785,7 +2922,10 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
     }
 
     const apt = existing[0];
-    if (apt.doctor_id !== doctorUserId) {
+    const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${doctorUserId};`;
+    const allowedDoctorIds = [doctorUserId, ...docRows.map(d => d.id)];
+
+    if (!allowedDoctorIds.includes(apt.doctor_id) && req.user.role !== 'admin' && req.user.role !== 'hospital_admin') {
       return res.status(403).json({ detail: 'Unauthorized. You can only confirm appointments assigned to you.' });
     }
 
@@ -2793,41 +2933,50 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
       return res.status(400).json({ detail: `Appointment cannot be accepted from current status '${apt.status}'.` });
     }
 
-    // 2. Prevent conflicting double-booking on confirmation
+    const targetDate = appointment_date || apt.appointment_date;
+    const targetTime = time_slot || apt.time_slot;
+
+    // 2. Prevent conflicting double-booking on confirmation for this doctor
     const conflict = await sql`
       SELECT id FROM appointments
-      WHERE doctor_id = ${doctorUserId}
-        AND appointment_date = ${apt.appointment_date}
-        AND time_slot = ${apt.time_slot}
+      WHERE doctor_id = ${apt.doctor_id}
+        AND appointment_date = ${targetDate}
+        AND time_slot = ${targetTime}
         AND status = 'CONFIRMED'
         AND id != ${id}
       LIMIT 1;
     `;
 
     if (conflict.length > 0) {
-      return res.status(409).json({ detail: 'You already have another confirmed appointment at this exact slot.' });
+      return res.status(409).json({ detail: `You already have another confirmed 1-hour appointment at ${targetTime} on ${targetDate}.` });
     }
 
-    // 3. Update status to CONFIRMED
+    // 3. Update status to CONFIRMED with selected 60-minute slot
     await sql`
       UPDATE appointments
-      SET status = 'CONFIRMED', updated_at = NOW()
+      SET status = 'CONFIRMED',
+          appointment_date = ${targetDate},
+          time_slot = ${targetTime},
+          updated_at = NOW()
       WHERE id = ${id};
     `;
 
     // 4. Create Notification for Patient
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
-    const notifMessage = `Your consultation with ${apt.doctor_name} on ${apt.appointment_date} at ${apt.time_slot} has been confirmed.`;
+    const notifMessage = `Your 1-hour consultation with ${apt.doctor_name} has been confirmed for ${targetDate} at ${targetTime}.`;
     const patientLink = `/patient/appointments?id=${id}`;
     await sql`
       INSERT INTO notifications (id, user_id, type, title, message, entity_id, link_url, is_read, created_at)
-      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_CONFIRMED', 'Appointment Confirmed', ${notifMessage}, ${id}, ${patientLink}, FALSE, NOW());
+      VALUES (${notifId}, ${apt.patient_id}, 'APPOINTMENT_CONFIRMED', 'Appointment Confirmed & Scheduled', ${notifMessage}, ${id}, ${patientLink}, FALSE, NOW());
     `;
 
     return res.json({
       id,
       status: 'CONFIRMED',
-      message: 'Appointment successfully confirmed.',
+      appointment_date: targetDate,
+      time_slot: targetTime,
+      duration: '60 minutes',
+      message: 'Appointment successfully confirmed and scheduled.',
     });
   } catch (err) {
     return res.status(500).json({ detail: `Failed to confirm appointment: ${err.message}` });
@@ -6340,4 +6489,147 @@ app.get(['/search', '/api/search'], async (req, res) => {
   }
 });
 
+// ==========================================
+// 15. MEDICATION MANAGEMENT & ADHERENCE
+// ==========================================
+
+// Patient gets active prescribed medicines + today's adherence logs
+app.get(['/patient/medications', '/api/patient/medications'], authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.sub || req.user.id;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // 1. Fetch patient prescribed medications from prescriptions & prescription_items
+    const prescribedItems = await sql`
+      SELECT pi.id, pi.prescription_id, pi.medicine_name, pi.dosage, pi.frequency,
+             pi.duration, pi.instructions, p.created_at, p.doctor_name
+      FROM prescription_items pi
+      JOIN prescriptions p ON pi.prescription_id = p.id
+      WHERE p.patient_id = ${userId} OR p.patient_id IN (SELECT id FROM patients WHERE user_id = ${userId})
+      ORDER BY p.created_at DESC;
+    `;
+
+    // 2. Fetch today's adherence logs for this patient
+    const todayLogs = await sql`
+      SELECT id, medicine_name, dosage, slot, status, log_date, notes, logged_at
+      FROM medication_adherence_logs
+      WHERE user_id = ${userId} AND log_date = ${todayStr}
+      ORDER BY logged_at DESC;
+    `;
+
+    // 3. Fetch past 7 days logs for adherence metrics
+    const weeklyLogs = await sql`
+      SELECT status, COUNT(*)::int as count
+      FROM medication_adherence_logs
+      WHERE user_id = ${userId} AND logged_at >= NOW() - INTERVAL '7 days'
+      GROUP BY status;
+    `;
+
+    return res.json({
+      prescribed_items: prescribedItems,
+      today_logs: todayLogs,
+      weekly_stats: weeklyLogs,
+      today_date: todayStr
+    });
+  } catch (err) {
+    console.error('Fetch patient medications error:', err);
+    return res.status(500).json({ detail: `Failed to fetch medications: ${err.message}` });
+  }
+});
+
+// Patient logs dose: Taken, Skipped, Missed (prevent duplicate entry on same slot today)
+app.post(['/patient/medications/log-dose', '/api/patient/medications/log-dose'], authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.sub || req.user.id;
+    const { medicine_name, dosage = '', slot = 'Morning', status = 'TAKEN', notes = '' } = req.body;
+    if (!medicine_name) {
+      return res.status(400).json({ detail: 'Medicine name is required.' });
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    // Check duplicate logging on same day + slot
+    const existing = await sql`
+      SELECT id, status FROM medication_adherence_logs
+      WHERE user_id = ${userId} AND medicine_name = ${medicine_name} AND slot = ${slot} AND log_date = ${todayStr}
+      LIMIT 1;
+    `;
+
+    const logId = existing.length > 0 ? existing[0].id : `medlog_${crypto.randomBytes(6).toString('hex')}`;
+
+    if (existing.length > 0) {
+      await sql`
+        UPDATE medication_adherence_logs
+        SET status = ${status.toUpperCase()}, notes = ${notes}, logged_at = NOW()
+        WHERE id = ${logId};
+      `;
+    } else {
+      await sql`
+        INSERT INTO medication_adherence_logs (id, user_id, medicine_name, dosage, slot, status, log_date, notes, logged_at)
+        VALUES (${logId}, ${userId}, ${medicine_name}, ${dosage}, ${slot}, ${status.toUpperCase()}, ${todayStr}, ${notes}, NOW());
+      `;
+    }
+
+    return res.json({
+      success: true,
+      log_id: logId,
+      medicine_name,
+      slot,
+      status: status.toUpperCase(),
+      log_date: todayStr,
+      message: `Dose recorded as ${status.toUpperCase()}`
+    });
+  } catch (err) {
+    console.error('Log medication dose error:', err);
+    return res.status(500).json({ detail: `Failed to record dose: ${err.message}` });
+  }
+});
+
+// Doctor views patient's medication adherence history
+app.get(['/doctor/patient/:id/medication-adherence', '/api/doctor/patient/:id/medication-adherence'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    let targetUserId = id;
+    const patRows = await sql`SELECT user_id FROM patients WHERE id = ${id} LIMIT 1;`;
+    if (patRows.length > 0 && patRows[0].user_id) {
+      targetUserId = patRows[0].user_id;
+    }
+
+    const adherenceLogs = await sql`
+      SELECT id, medicine_name, dosage, slot, status, log_date, notes, logged_at
+      FROM medication_adherence_logs
+      WHERE user_id = ${targetUserId}
+      ORDER BY logged_at DESC
+      LIMIT 50;
+    `;
+
+    const stats = await sql`
+      SELECT status, COUNT(*)::int as count
+      FROM medication_adherence_logs
+      WHERE user_id = ${targetUserId} AND logged_at >= NOW() - INTERVAL '30 days'
+      GROUP BY status;
+    `;
+
+    return res.json({
+      patient_id: id,
+      user_id: targetUserId,
+      adherence_logs: adherenceLogs,
+      stats: stats
+    });
+  } catch (err) {
+    console.error('Doctor fetch adherence error:', err);
+    return res.status(500).json({ detail: `Failed to load adherence data: ${err.message}` });
+  }
+});
+
+export { ensureTables };
 export default app;
