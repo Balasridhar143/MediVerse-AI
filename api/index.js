@@ -2059,8 +2059,7 @@ app.post(['/reports/:id/reanalyze', '/api/reports/:id/reanalyze'], async (req, r
       UPDATE medical_reports
       SET parameters = ${JSON.stringify(ragAnalysis.parameters || [])},
           structured_data = ${JSON.stringify(ragAnalysis.structured_data || {})},
-          ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})},
-          updated_at = NOW()
+          ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})}
       WHERE id = ${id};
     `;
 

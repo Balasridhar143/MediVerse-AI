@@ -37,3 +37,4 @@ android-sdk/
 *.zip
 
 backups/*.json
+*.traineddata

@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams, Link } from 'react-router-dom';
 import {
   FileText,
   Upload,
@@ -15,12 +15,18 @@ import {
   Clock,
   ArrowRight,
   ShieldCheck,
+  ShieldAlert,
   RefreshCw,
   Stethoscope,
   ChevronDown,
   ChevronUp,
   FileQuestion,
-  Activity
+  Activity,
+  Info,
+  Check,
+  XCircle,
+  User,
+  ListChecks,
 } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -31,6 +37,8 @@ import { useAuth } from '../../context/AuthContext';
 
 export default function ReportAnalyzer() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlReportId = searchParams.get('reportId') || '';
 
   const [selectedLanguage, setSelectedLanguage] = useState(() => {
     return localStorage.getItem('mediverse_patient_language') || 'en';
@@ -43,17 +51,53 @@ export default function ReportAnalyzer() {
   const [hospital, setHospital] = useState('Advanced Clinical Laboratories');
   const [doctor, setDoctor] = useState('Dr. Arun Kumar, MD');
   const [validationError, setValidationError] = useState('');
+  const [analysisError, setAnalysisError] = useState('');
 
   // Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [currentReportId, setCurrentReportId] = useState(null);
+  const [currentReportId, setCurrentReportId] = useState(urlReportId || null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
 
   const fileInputRef = useRef(null);
+
+  // 1. Load saved analysis on mount or URL param change (Persistence requirement)
+  useEffect(() => {
+    let isMounted = true;
+    if (urlReportId && (!analysisResult || currentReportId !== urlReportId)) {
+      setIsAnalyzing(true);
+      setAnalysisError('');
+      reportService.getReportById(urlReportId)
+        .then((rep) => {
+          if (!isMounted) return;
+          if (rep) {
+            setAnalysisResult(rep);
+            setCurrentReportId(rep.id);
+            if (rep.reportName) setReportName(rep.reportName);
+            if (rep.patientName) setPatientName(rep.patientName);
+            if (rep.hospital) setHospital(rep.hospital);
+            if (rep.doctor) setDoctor(rep.doctor);
+            if (rep.reportType) setReportType(rep.reportType);
+            setSavedSuccess(true);
+          }
+        })
+        .catch((err) => {
+          if (isMounted) {
+            console.warn('Failed to load saved report analysis:', err);
+            setAnalysisError('Unable to load saved report analysis from database.');
+          }
+        })
+        .finally(() => {
+          if (isMounted) setIsAnalyzing(false);
+        });
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [urlReportId]);
 
   const handleLanguageChange = async (lang) => {
     setSelectedLanguage(lang);
@@ -64,6 +108,8 @@ export default function ReportAnalyzer() {
         const res = await reportService.reanalyzeReport(currentReportId, lang);
         if (res.rag_analysis) {
           setAnalysisResult(res.rag_analysis);
+        } else if (res.report) {
+          setAnalysisResult(res.report);
         }
       } catch (e) {
         console.warn('Re-analysis translation warning:', e);
@@ -74,11 +120,11 @@ export default function ReportAnalyzer() {
   };
 
   const analysisSteps = [
-    'Parsing file and validating document headers...',
-    'Extracting quantitative laboratory entities and measurement units...',
-    'Evaluating values against clinical reference bounds...',
-    'Querying RAG medical guidelines (WHO, ADA, ICSH, KDIGO)...',
-    'Synthesizing cautious, evidence-grounded recommendations...'
+    'Reading and extracting text from report (PDF / OCR)...',
+    'Identifying quantitative medical tests, values, and units...',
+    'Comparing measurements against clinical reference intervals...',
+    'Querying medical knowledge guidelines (WHO, ADA, ICSH, KDIGO)...',
+    'Synthesizing detailed, patient-friendly clinical explanation...'
   ];
 
   const handleFileChange = (e) => {
@@ -95,12 +141,13 @@ export default function ReportAnalyzer() {
 
   const validateFile = (candidate) => {
     setValidationError('');
+    setAnalysisError('');
     if (!candidate) return;
 
-    const allowed = ['pdf', 'png', 'jpg', 'jpeg'];
+    const allowed = ['pdf', 'png', 'jpg', 'jpeg', 'webp'];
     const ext = candidate.name.split('.').pop()?.toLowerCase();
     if (!ext || !allowed.includes(ext)) {
-      setValidationError('Supported file formats: PDF, JPG, or PNG.');
+      setValidationError('Supported file formats: PDF, JPG, PNG, or WEBP.');
       setFile(null);
       return;
     }
@@ -118,17 +165,17 @@ export default function ReportAnalyzer() {
   };
 
   const runAnalysis = async () => {
-    if (!file) {
+    if (!file && !currentReportId) {
       setValidationError('Please select or drag a medical report file before initiating analysis.');
       return;
     }
 
     setIsAnalyzing(true);
-    setAnalysisResult(null);
+    setAnalysisError('');
+    setValidationError('');
     setSavedSuccess(false);
     setCurrentStep(0);
 
-    // Animate through analysis progress steps
     const stepInterval = setInterval(() => {
       setCurrentStep((prev) => {
         if (prev < analysisSteps.length - 1) {
@@ -136,13 +183,13 @@ export default function ReportAnalyzer() {
         }
         return prev;
       });
-    }, 700);
+    }, 800);
 
     try {
       const response = await reportService.analyzeReport({
         file,
         patientName: patientName || user?.full_name || 'Patient Record',
-        reportName: reportName || file.name.replace(/\.[^/.]+$/, ''),
+        reportName: reportName || file?.name?.replace(/\.[^/.]+$/, '') || 'Diagnostic Report',
         reportType,
         hospital,
         doctor,
@@ -150,12 +197,22 @@ export default function ReportAnalyzer() {
       });
 
       clearInterval(stepInterval);
-      setAnalysisResult(response.ragAnalysis || response.report);
-      setCurrentReportId(response.reportId || response.report?.id);
+      const resData = response.ragAnalysis || response.report;
+      const repId = response.reportId || response.report?.id;
+
+      setAnalysisResult(resData);
+      setCurrentReportId(repId);
       setSavedSuccess(true);
+
+      // Persist in URL query so refreshing or sharing keeps the analysis
+      if (repId) {
+        setSearchParams({ reportId: repId }, { replace: true });
+      }
     } catch (err) {
       clearInterval(stepInterval);
-      setValidationError(`Analysis could not be completed: ${err.message || 'Please verify document format.'}`);
+      console.error('Report analysis error:', err);
+      const msg = err.response?.data?.detail || err.message || 'Verification of document failed.';
+      setAnalysisError(msg);
     } finally {
       setIsAnalyzing(false);
     }
@@ -164,17 +221,30 @@ export default function ReportAnalyzer() {
   const resetForm = () => {
     setFile(null);
     setAnalysisResult(null);
+    setCurrentReportId(null);
     setValidationError('');
+    setAnalysisError('');
     setSavedSuccess(false);
     setCurrentStep(0);
+    setSearchParams({});
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  // Helper extracts explanation data safely across live analysis & loaded DB formats
+  const aiExp = analysisResult?.ai_explanation || analysisResult?.aiExplanation || {};
+  const structData = analysisResult?.structured_data || analysisResult?.structuredData || {};
+  const parameters = analysisResult?.parameters || analysisResult?.test_results_table || [];
+
+  const normalParams = parameters.filter((p) => p.status === 'Normal' || p.flag === 'Normal');
+  const abnormalParams = parameters.filter((p) => p.status !== 'Normal' && p.flag !== 'Normal');
+  const criticalParams = parameters.filter((p) => p.is_critical);
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
       {/* Page Header */}
       <PageHeader
-        badge="Evidence-Based RAG Intelligence"
-        badgeStatus="Clinical Decision Support"
+        badge="Evidence-Based Clinical Intelligence"
+        badgeStatus="Verified Lab Analysis"
         title="AI Medical Report Analyzer"
         subtitle="Automated laboratory parameter extraction, physiological reference interval comparison, and clinical guideline citations."
         action={
@@ -192,18 +262,53 @@ export default function ReportAnalyzer() {
         }
       />
 
-      {/* Safety Notice */}
+      {/* Clinical Practice Guardrail & Safety Notice */}
       <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
         <div className="text-xs text-amber-900 leading-relaxed">
-          <span className="font-bold">CLINICAL SAFETY MANDATE: </span>
-          Automated analysis provides evidence-based educational insights and reference comparisons. It does NOT provide a definitive diagnosis or replace the clinical assessment of a qualified, registered medical practitioner. Always review lab findings with your physician.
+          <span className="font-bold">CLINICAL SAFETY MANDATE & AI BOUNDARY: </span>
+          Automated analysis provides evidence-based educational insights and reference comparisons. It does <strong>NOT</strong> provide a definitive diagnosis, prognosis, or prescription. Always review lab findings with your attending doctor for comprehensive medical evaluation.
         </div>
       </div>
 
+      {/* Analysis Error Card with Retry Option (Requirement 9) */}
+      {analysisError && (
+        <div className="p-5 bg-rose-50 border border-rose-200 rounded-xl space-y-3">
+          <div className="flex items-start gap-3">
+            <XCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h4 className="text-sm font-bold text-rose-900">Analysis Encountered an Error</h4>
+              <p className="text-xs text-rose-800 leading-relaxed">{analysisError}</p>
+              <p className="text-[11px] text-rose-700">
+                Troubleshooting tips: Ensure document is a readable PDF, PNG, or JPG (under 15MB). Scanned reports should have clear contrast and legible text.
+              </p>
+            </div>
+          </div>
+          <div className="pt-2 flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              icon={RefreshCw}
+              onClick={runAnalysis}
+              className="bg-rose-700 hover:bg-rose-800 text-xs font-bold shadow-xs"
+            >
+              Retry Analysis
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={resetForm}
+              className="text-xs"
+            >
+              Select Another Document
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Zone (Kept completely functional and preserved) */}
       {!analysisResult && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* File Upload Zone */}
           <div className="lg:col-span-2 space-y-4">
             <Card title="Upload Diagnostic Document" icon={Upload}>
               <div
@@ -222,7 +327,7 @@ export default function ReportAnalyzer() {
                   type="file"
                   ref={fileInputRef}
                   onChange={handleFileChange}
-                  accept=".pdf,.png,.jpg,.jpeg"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp"
                   className="hidden"
                 />
 
@@ -253,7 +358,7 @@ export default function ReportAnalyzer() {
                       Drag & drop your medical laboratory report here
                     </p>
                     <p className="text-xs text-slate-500">
-                      Supports PDF, PNG, or JPG lab results up to 15MB
+                      Supports PDF, PNG, JPG, or scanned lab reports up to 15MB
                     </p>
                     <div className="pt-2">
                       <Button
@@ -380,32 +485,34 @@ export default function ReportAnalyzer() {
                 <span>Verified Guideline Citations</span>
               </div>
               <p className="text-[11px] text-teal-900 leading-relaxed">
-                Extracted values are cross-checked against clinical thresholds published by WHO, the American Diabetes Association (ADA), and the International Council for Standardization in Haematology (ICSH).
+                Extracted laboratory values are cross-referenced with diagnostic thresholds from WHO, the American Diabetes Association (ADA), and the International Council for Standardization in Haematology (ICSH).
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Analysis Results View */}
+      {/* ========================================================================= */}
+      {/* COMPLETE AI REPORT EXPLANATION DISPLAY (Requirements 6 & 7) */}
+      {/* ========================================================================= */}
       {analysisResult && (
         <div className="space-y-6">
-          {/* Success Banner */}
+          {/* Success & Persistence Ribbon */}
           <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <CheckCircle2 className="w-5 h-5 text-emerald-600" />
               <div>
                 <p className="text-xs font-bold text-emerald-900">Analysis Complete & Health Record Persisted</p>
                 <p className="text-[11px] text-emerald-700">
-                  Document parameters and RAG guideline citations have been indexed in Neon PostgreSQL.
+                  Extracted biomarkers, reference bounds, and clinical explanations are saved to your electronic health record.
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-            <UniversalLanguageSelector
-              language={selectedLanguage}
-              onChangeLanguage={handleLanguageChange}
-            />
+              <UniversalLanguageSelector
+                language={selectedLanguage}
+                onChangeLanguage={handleLanguageChange}
+              />
               <Button variant="outline" size="sm" icon={RefreshCw} onClick={resetForm} className="text-xs">
                 Analyze Another
               </Button>
@@ -417,52 +524,131 @@ export default function ReportAnalyzer() {
             </div>
           </div>
 
-          {/* Metric Highlights */}
+          {/* Metric Highlights Ribbon */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <div className="bg-white p-4 rounded-xl border border-slate-200">
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
               <p className="text-xs text-slate-500 font-medium">Total Parameters</p>
-              <p className="text-2xl font-black text-slate-800 mt-1">
-                {analysisResult.parameters?.length || analysisResult.test_results_table?.length || 0}
-              </p>
+              <p className="text-2xl font-black text-slate-800 mt-1">{parameters.length}</p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/20">
+            <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-xs">
               <p className="text-xs text-emerald-700 font-medium">Within Normal Bounds</p>
-              <p className="text-2xl font-black text-emerald-700 mt-1">
-                {(analysisResult.parameters || analysisResult.test_results_table || []).filter(p => p.status === 'Normal' || p.flag === 'Normal').length}
-              </p>
+              <p className="text-2xl font-black text-emerald-700 mt-1">{normalParams.length}</p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/20">
+            <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/20 shadow-xs">
               <p className="text-xs text-amber-700 font-medium">Outside Reference Range</p>
-              <p className="text-2xl font-black text-amber-700 mt-1">
-                {(analysisResult.parameters || analysisResult.test_results_table || []).filter(p => p.status !== 'Normal' && p.flag !== 'Normal').length}
-              </p>
+              <p className="text-2xl font-black text-amber-700 mt-1">{abnormalParams.length}</p>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border border-rose-200 bg-rose-50/20">
-              <p className="text-xs text-rose-700 font-medium">Critical Thresholds</p>
-              <p className="text-2xl font-black text-rose-700 mt-1">
-                {(analysisResult.parameters || analysisResult.test_results_table || []).filter(p => p.is_critical).length}
-              </p>
+            <div className="bg-white p-4 rounded-xl border border-rose-200 bg-rose-50/20 shadow-xs">
+              <p className="text-xs text-rose-700 font-medium">Critical Alerts</p>
+              <p className="text-2xl font-black text-rose-700 mt-1">{criticalParams.length}</p>
             </div>
           </div>
 
-          {/* Interactive Parameters Table */}
-          <Card title="Structured Laboratory Parameters" icon={Activity}>
+          {/* 1. OVERALL REPORT SUMMARY */}
+          <Card title="1. Overall Report Summary" icon={FileText}>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 pb-2 border-b border-slate-100 text-xs">
+                <span className="font-semibold text-slate-700">Patient:</span>
+                <strong className="text-slate-900">{analysisResult.patientName || patientName || 'Patient Record'}</strong>
+                <span className="text-slate-300">•</span>
+                <span className="font-semibold text-slate-700">Category:</span>
+                <span className="text-slate-900">{analysisResult.reportType || reportType}</span>
+                <span className="text-slate-300">•</span>
+                <span className="font-semibold text-slate-700">Facility:</span>
+                <span className="text-slate-900">{analysisResult.hospital || hospital}</span>
+                <span className="text-slate-300">•</span>
+                <span className="font-semibold text-slate-700">Date:</span>
+                <span className="text-slate-900">{analysisResult.date || new Date().toISOString().split('T')[0]}</span>
+              </div>
+
+              <p className="text-xs text-slate-800 leading-relaxed font-medium bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+                {aiExp.overall_summary || aiExp.summary || structData.overall_summary || 'Diagnostic laboratory analysis processed.'}
+              </p>
+            </div>
+          </Card>
+
+          {/* 2. NORMAL & ABNORMAL FINDINGS BREAKDOWN */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Abnormal Findings */}
+            <Card title="Abnormal Findings (Requires Doctor Correlation)" icon={AlertTriangle}>
+              {abnormalParams.length === 0 ? (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>All analyzed biomarkers fall within standard reference intervals.</span>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {(aiExp.abnormal_findings || abnormalParams).map((abn, aIdx) => {
+                    const testName = abn.test_name || abn.name;
+                    const val = abn.value || abn.patient_value;
+                    const ref = abn.reference_range || abn.referenceRange;
+                    const sig = abn.significance || abn.possible_reasons || 'Observed reading is outside laboratory reference intervals.';
+
+                    return (
+                      <div key={aIdx} className="p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-xs space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <strong className="text-amber-950 font-bold">{testName}</strong>
+                          <span className="px-2 py-0.5 rounded font-bold text-[10px] bg-amber-200 text-amber-900">
+                            {abn.status || 'Out of Range'}
+                          </span>
+                        </div>
+                        <p className="text-slate-700 font-mono text-[11px]">
+                          Observed: <strong>{val}</strong> {abn.unit || ''} (Ref: {ref})
+                        </p>
+                        <p className="text-slate-600 text-[11px] leading-relaxed pt-0.5">
+                          {sig}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+
+            {/* Normal Findings */}
+            <Card title="Normal Findings (Healthy Physiological Bounds)" icon={CheckCircle2}>
+              {normalParams.length === 0 ? (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
+                  No parameters were classified within standard physiological ranges.
+                </div>
+              ) : (
+                <ul className="space-y-2 text-xs">
+                  {(aiExp.normal_findings || normalParams).map((norm, nIdx) => {
+                    const text = typeof norm === 'string'
+                      ? norm
+                      : `${norm.test_name || norm.name} (${norm.patient_value || norm.value} ${norm.unit || ''}) aligns with normal bounds (${norm.reference_range || norm.referenceRange}).`;
+
+                    return (
+                      <li key={nIdx} className="flex items-start gap-2 p-2 rounded-lg bg-emerald-50/40 border border-emerald-100 text-slate-700">
+                        <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                        <span>{text}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </Card>
+          </div>
+
+          {/* 3. STRUCTURED PARAMETERS TABLE (EACH TEST & ITS PURPOSE) */}
+          <Card title="2. Structured Test Parameters & Clinical Purpose" icon={Activity}>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-slate-700 font-bold">
                     <th className="py-2.5 px-3">Test Parameter</th>
+                    <th className="py-2.5 px-3">Purpose in Body</th>
                     <th className="py-2.5 px-3">Observed Value</th>
                     <th className="py-2.5 px-3">Reference Interval</th>
-                    <th className="py-2.5 px-3">Status Indicator</th>
-                    <th className="py-2.5 px-3 text-right">Clinical Details</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3 text-right">Detailed Reason</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {(analysisResult.parameters || analysisResult.test_results_table || []).map((t, idx) => {
+                  {parameters.map((t, idx) => {
                     const isNormal = t.status === 'Normal' || t.flag === 'Normal';
                     const isCritical = t.is_critical;
                     const isExpanded = expandedRow === idx;
@@ -472,6 +658,9 @@ export default function ReportAnalyzer() {
                         <tr className="hover:bg-slate-50/80 transition-colors">
                           <td className="py-3 px-3 font-semibold text-slate-800">
                             {t.test_name || t.name}
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 max-w-xs truncate">
+                            {t.purpose || t.meaning || 'Clinical laboratory observation.'}
                           </td>
                           <td className="py-3 px-3 font-mono font-bold text-slate-900">
                             {t.patient_value !== undefined ? t.patient_value : t.value} <span className="text-slate-500 font-normal">{t.unit}</span>
@@ -508,24 +697,20 @@ export default function ReportAnalyzer() {
 
                         {isExpanded && (
                           <tr className="bg-slate-50/60">
-                            <td colSpan={5} className="py-3 px-4">
+                            <td colSpan={6} className="py-3 px-4">
                               <div className="p-3 bg-white border border-slate-200 rounded-lg text-xs space-y-2">
                                 <div>
-                                  <span className="font-bold text-slate-700">What this test measures: </span>
-                                  <span className="text-slate-600">{t.meaning || 'Clinical diagnostic parameter.'}</span>
+                                  <span className="font-bold text-slate-700">Test Purpose: </span>
+                                  <span className="text-slate-600">{t.purpose || t.meaning}</span>
                                 </div>
-                                {t.possible_reasons && (
-                                  <div>
-                                    <span className="font-bold text-slate-700">Possible physiological reasons: </span>
-                                    <span className="text-slate-600">{t.possible_reasons}</span>
-                                  </div>
-                                )}
-                                {t.explanation && (
-                                  <div>
-                                    <span className="font-bold text-slate-700">Evaluation: </span>
-                                    <span className="text-slate-600">{t.explanation}</span>
-                                  </div>
-                                )}
+                                <div>
+                                  <span className="font-bold text-slate-700">Possible Physiological Factors: </span>
+                                  <span className="text-slate-600">{t.possible_reasons || 'Varies based on hydration, diet, exercise, or acute physiological stressors.'}</span>
+                                </div>
+                                <div>
+                                  <span className="font-bold text-slate-700">Clinical Evaluation: </span>
+                                  <span className="text-slate-600">{t.explanation || `${t.test_name} recorded at ${t.patient_value} ${t.unit}.`}</span>
+                                </div>
                               </div>
                             </td>
                           </tr>
@@ -538,9 +723,74 @@ export default function ReportAnalyzer() {
             </div>
           </Card>
 
-          {/* RAG Knowledge Guideline Citations */}
+          {/* 4. POSSIBLE SIGNIFICANCE OF ABNORMAL VALUES */}
+          {abnormalParams.length > 0 && (
+            <Card title="3. Possible Significance of Abnormal Values" icon={Info}>
+              <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2 text-xs">
+                <p className="text-amber-950 font-semibold leading-relaxed">
+                  {aiExp.possible_significance || structData.important_findings || 'Abnormal laboratory findings require clinical correlation with symptoms and physical examination.'}
+                </p>
+                <p className="text-amber-900 text-[11px] leading-relaxed">
+                  Important clinical note: An individual lab reading that falls outside established reference intervals does not independently diagnose a chronic disease. Temporary physiological factors like hydration, fasting duration, recent physical exertion, and minor viral illnesses can shift numbers. Your doctor will assess whether repeat testing is required.
+                </p>
+              </div>
+            </Card>
+          )}
+
+          {/* 5 & 6. IMPORTANT PRECAUTIONS & RECOMMENDED NEXT STEPS */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card title="4. Important Precautions" icon={ShieldAlert}>
+              <ul className="space-y-2.5 text-xs text-slate-700">
+                {(aiExp.precautions || [
+                  'Do not independently start, stop, or change doses of any prescription medications based on this laboratory report.',
+                  'Avoid self-treating abnormal results with unverified over-the-counter supplements or antibiotics without physician approval.',
+                  'Maintain balanced daily hydration and dietary habits unless specific restrictions have been advised by your medical provider.',
+                  'If you experience severe fatigue, shortness of breath, dizziness, sudden chest pain, or high fever, seek immediate medical consultation.'
+                ]).map((pre, pIdx) => (
+                  <li key={pIdx} className="flex items-start gap-2">
+                    <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>{pre}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+
+            <Card title="5. Recommended Next Steps" icon={CheckCircle2}>
+              <ul className="space-y-2.5 text-xs text-slate-700">
+                {(aiExp.recommendations || structData.recommendations || [
+                  'Schedule a follow-up consultation with your attending physician to review these laboratory findings.',
+                  'Keep this digitized report accessible in your MediVerse profile and share it with your consulting clinician.',
+                  'Plan for a repeat follow-up test in 2 to 4 weeks if recommended by your physician to track longitudinal stabilization.'
+                ]).map((rec, rIdx) => (
+                  <li key={rIdx} className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                    <span>{rec}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          </div>
+
+          {/* 7. QUESTIONS TO ASK YOUR DOCTOR */}
+          <Card title="6. Questions You Can Ask Your Doctor" icon={HelpCircle}>
+            <ul className="space-y-2.5 text-xs text-slate-700">
+              {(aiExp.doctor_discussion_questions || aiExp.questionsForDoctor || [
+                'What might be the primary cause of any abnormal readings in this report?',
+                'Do any of these values warrant repeat confirmatory testing or additional diagnostic panels?',
+                'Could recent dietary habits, dehydration, or medications have influenced these specific test numbers?',
+                'When should my next routine follow-up checkup be scheduled?'
+              ]).map((q, qIdx) => (
+                <li key={qIdx} className="flex items-start gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+                  <ArrowRight className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+                  <span className="font-medium text-slate-800">{q}</span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+
+          {/* 8. EVIDENCE-BASED GUIDELINE CITATIONS (RAG PIPELINE) */}
           {(analysisResult.rag_citations || analysisResult.rag_sources || []).length > 0 && (
-            <Card title="Evidence-Based Guideline Citations (RAG Pipeline)" icon={ShieldCheck}>
+            <Card title="7. Evidence-Based Guideline Citations (RAG Pipeline)" icon={ShieldCheck}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {(analysisResult.rag_citations || analysisResult.rag_sources || []).map((citation, cIdx) => (
                   <div key={cIdx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
@@ -571,37 +821,12 @@ export default function ReportAnalyzer() {
             </Card>
           )}
 
-          {/* Cautious Recommendations & Questions for Physician */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card title="Clinical Recommendations" icon={Stethoscope}>
-              <ul className="space-y-2.5 text-xs text-slate-700">
-                {(analysisResult.ai_explanation?.recommendations || analysisResult.medical_recommendations?.evidence_guidance || [
-                  'Consult your attending physician to correlate lab parameters with symptoms.',
-                  'Do not modify prescription doses independently based on lab values.',
-                  'Maintain adequate hydration before repeat tests.'
-                ]).map((rec, rIdx) => (
-                  <li key={rIdx} className="flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-                    <span>{rec}</span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-
-            <Card title="Discussion Points for Your Doctor" icon={HelpCircle}>
-              <ul className="space-y-2.5 text-xs text-slate-700">
-                {(analysisResult.ai_explanation?.doctor_discussion_questions || [
-                  'Do any of the abnormal values require immediate medication adjustments or follow-up tests?',
-                  'Could recent diet, hydration, or exercise have influenced these numbers?',
-                  'When should a repeat diagnostic panel be performed?'
-                ]).map((q, qIdx) => (
-                  <li key={qIdx} className="flex items-start gap-2">
-                    <ArrowRight className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-                    <span>{q}</span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
+          {/* 9. CLINICAL PRACTICE GUARDRAIL DISCLAIMER */}
+          <div className="p-4 bg-slate-100 border border-slate-200 rounded-xl text-[11px] text-slate-600 space-y-1">
+            <span className="font-bold text-slate-800">CLINICAL DECISION SUPPORT DISCLAIMER:</span>
+            <p>
+              {aiExp.disclaimer || 'This automated AI analysis is generated exclusively for patient health literacy and clinical decision support. It does NOT constitute a definitive medical diagnosis, clinical prognosis, or prescription. All laboratory findings must be reviewed and correlated with physical examination by a qualified, registered medical practitioner.'}
+            </p>
           </div>
         </div>
       )}

@@ -292,11 +292,10 @@ export default function MedicalReports() {
         <button
           type="button"
           onClick={() => setActiveTab('dashboard')}
-          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'dashboard'
+          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab === 'dashboard'
               ? 'bg-white text-slate-900 shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <FileCheck2 className="w-3.5 h-3.5 text-teal-700" />
           <span>Recent Reports</span>
@@ -305,11 +304,10 @@ export default function MedicalReports() {
         <button
           type="button"
           onClick={() => setActiveTab('compare')}
-          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'compare'
+          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab === 'compare'
               ? 'bg-white text-slate-900 shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <Columns className="w-3.5 h-3.5 text-teal-700" />
           <span>Compare Reports</span>
@@ -318,11 +316,10 @@ export default function MedicalReports() {
         <button
           type="button"
           onClick={() => setActiveTab('trends')}
-          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'trends'
+          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab === 'trends'
               ? 'bg-white text-slate-900 shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <TrendingUp className="w-3.5 h-3.5 text-teal-700" />
           <span>Monthly Trend Charts</span>
@@ -331,11 +328,10 @@ export default function MedicalReports() {
         <button
           type="button"
           onClick={() => setActiveTab('terms')}
-          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'terms'
+          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab === 'terms'
               ? 'bg-white text-slate-900 shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <BookOpen className="w-3.5 h-3.5 text-teal-700" />
           <span>Medical Terms</span>
@@ -344,11 +340,10 @@ export default function MedicalReports() {
         <button
           type="button"
           onClick={() => setActiveTab('timeline')}
-          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${
-            activeTab === 'timeline'
+          className={`px-3.5 py-1.5 rounded-lg font-bold whitespace-nowrap transition-colors cursor-pointer flex items-center gap-1.5 ${activeTab === 'timeline'
               ? 'bg-white text-slate-900 shadow-2xs'
               : 'text-slate-600 hover:text-slate-900'
-          }`}
+            }`}
         >
           <Clock className="w-3.5 h-3.5 text-teal-700" />
           <span>Health Timeline</span>
@@ -367,11 +362,10 @@ export default function MedicalReports() {
                 key={cat}
                 type="button"
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-                  selectedCategory === cat
+                className={`px-3 py-1.5 rounded-lg font-semibold whitespace-nowrap transition-colors cursor-pointer ${selectedCategory === cat
                     ? 'bg-teal-700 text-white shadow-2xs'
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
-                }`}
+                  }`}
               >
                 {cat}
               </button>
