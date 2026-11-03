@@ -644,6 +644,21 @@ export const doctorService = {
     const res = await api.put(`/doctor/patients/${id}`, data);
     return res.data;
   },
+
+  async getPatientHealthTrends(patientId) {
+    const res = await api.get(`/doctor/patients/${patientId}/health-trends`);
+    return res.data;
+  },
+
+  async getPatientEarlyWarnings(patientId) {
+    const res = await api.get(`/doctor/patients/${patientId}/early-warnings`);
+    return res.data;
+  },
+
+  async reviewEarlyWarning(patientId, warningId, notes = '') {
+    const res = await api.post(`/doctor/patients/${patientId}/early-warnings/${warningId}/review`, { notes });
+    return res.data;
+  },
 };
 
 /**

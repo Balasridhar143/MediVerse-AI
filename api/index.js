@@ -3431,8 +3431,8 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
           'Active Care' as status,
           a.created_at as sort_time
         FROM appointments a
-        JOIN users u ON a.patient_id = u.id
-        LEFT JOIN patients p ON a.patient_id = p.user_id
+        LEFT JOIN users u ON a.patient_id = u.id
+        LEFT JOIN patients p ON (a.patient_id = p.user_id OR a.patient_id = p.id)
         WHERE a.doctor_id = ${doctorUserId} OR a.doctor_id = ${docId}
 
         UNION ALL
@@ -3452,14 +3452,35 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
           'Active Care' as status,
           r.created_at as sort_time
         FROM doctor_patient_relationships r
-        JOIN users u ON r.patient_id = u.id
-        JOIN patients p ON r.patient_id = p.user_id
+        LEFT JOIN users u ON r.patient_id = u.id
+        LEFT JOIN patients p ON (r.patient_id = p.user_id OR r.patient_id = p.id)
         WHERE (r.doctor_id = ${doctorUserId} OR r.doctor_id = ${docId})
           AND (r.status = 'ACTIVE' OR r.access_status = 'GRANTED')
 
         UNION ALL
 
-        -- 3. Patients registered in doctor's hospital
+        -- 3. Patients with prescriptions from this doctor
+        SELECT
+          rx.patient_id as patient_key,
+          COALESCE(p.full_name, u.full_name, 'Patient Record') as patient_name,
+          COALESCE(p.age, 35) as age,
+          COALESCE(p.gender, 'M') as gender,
+          COALESCE(p.blood_group, 'O+') as blood_group,
+          COALESCE(rx.diagnosis, 'Prescription Care') as primary_condition,
+          TO_CHAR(rx.created_at, 'YYYY-MM-DD') as last_consultation,
+          TO_CHAR(rx.created_at + INTERVAL '14 days', 'YYYY-MM-DD') as next_follow_up,
+          p.phone as phone,
+          u.email as email,
+          'Active Rx Care' as status,
+          rx.created_at as sort_time
+        FROM prescriptions rx
+        LEFT JOIN users u ON rx.patient_id = u.id
+        LEFT JOIN patients p ON (rx.patient_id = p.user_id OR rx.patient_id = p.id)
+        WHERE (rx.doctor_id = ${doctorUserId} OR rx.doctor_id = ${docId})
+
+        UNION ALL
+
+        -- 4. Patients registered in doctor's hospital
         SELECT
           pr.user_id as patient_key,
           pr.full_name as patient_name,
@@ -3474,7 +3495,7 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
           'Hospital Inpatient' as status,
           pr.created_at as sort_time
         FROM patient_registrations pr
-        JOIN users u ON pr.user_id = u.id
+        LEFT JOIN users u ON pr.user_id = u.id
         LEFT JOIN patients p ON pr.user_id = p.user_id
         WHERE ${hospId ? true : false} AND pr.hospital_id = ${hospId || 'none'}
       ) combined
@@ -3484,6 +3505,614 @@ app.get(['/doctor/patients', '/api/doctor/patients'], authenticateToken, async (
     return res.json(patients);
   } catch (err) {
     return res.status(500).json({ detail: `Failed to fetch doctor patients: ${err.message}` });
+  }
+});
+
+// ==========================================
+// DOCTOR-PATIENT AUTHORIZATION VERIFIER
+// ==========================================
+async function checkDoctorPatientAuthorization(sql, user, targetPatientId) {
+  if (!user) return false;
+  if (user.role === 'admin' || user.role === 'hospital_admin') return true;
+
+  const doctorUserId = user.sub || user.id;
+  const docRows = await sql`SELECT id, hospital_id FROM doctors WHERE user_id = ${doctorUserId} OR id = ${doctorUserId} LIMIT 1;`;
+  const docId = docRows[0]?.id || doctorUserId;
+  const hospId = docRows[0]?.hospital_id;
+
+  // 1. Check appointments
+  const appt = await sql`
+    SELECT id FROM appointments
+    WHERE (doctor_id = ${doctorUserId} OR doctor_id = ${docId})
+      AND (
+        patient_id = ${targetPatientId} 
+        OR patient_id = (SELECT user_id FROM patients WHERE id = ${targetPatientId} LIMIT 1)
+        OR patient_id = (SELECT id FROM patients WHERE user_id = ${targetPatientId} LIMIT 1)
+      )
+    LIMIT 1;
+  `;
+  if (appt.length > 0) return true;
+
+  // 2. Check doctor-patient relationships
+  const rel = await sql`
+    SELECT id FROM doctor_patient_relationships
+    WHERE (doctor_id = ${doctorUserId} OR doctor_id = ${docId})
+      AND (
+        patient_id = ${targetPatientId}
+        OR patient_id = (SELECT user_id FROM patients WHERE id = ${targetPatientId} LIMIT 1)
+        OR patient_id = (SELECT id FROM patients WHERE user_id = ${targetPatientId} LIMIT 1)
+      )
+      AND (status = 'ACTIVE' OR access_status = 'GRANTED')
+    LIMIT 1;
+  `;
+  if (rel.length > 0) return true;
+
+  // 3. Check prescriptions
+  const rx = await sql`
+    SELECT id FROM prescriptions
+    WHERE (doctor_id = ${doctorUserId} OR doctor_id = ${docId})
+      AND (
+        patient_id = ${targetPatientId}
+        OR patient_id = (SELECT user_id FROM patients WHERE id = ${targetPatientId} LIMIT 1)
+        OR patient_id = (SELECT id FROM patients WHERE user_id = ${targetPatientId} LIMIT 1)
+      )
+    LIMIT 1;
+  `;
+  if (rx.length > 0) return true;
+
+  // 4. Check hospital registrations
+  if (hospId) {
+    const hospReg = await sql`
+      SELECT id FROM patient_registrations
+      WHERE hospital_id = ${hospId}
+        AND (
+          user_id = ${targetPatientId}
+          OR user_id = (SELECT user_id FROM patients WHERE id = ${targetPatientId} LIMIT 1)
+        )
+      LIMIT 1;
+    `;
+    if (hospReg.length > 0) return true;
+  }
+
+  return false;
+}
+
+// ==========================================
+// DOCTOR HEALTH TRENDS (REAL DATABASE INTEGRATION)
+// ==========================================
+app.get(['/doctor/patients/:id/health-trends', '/api/doctor/patients/:id/health-trends'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // 1. Validate authorization
+    const isAuthorized = await checkDoctorPatientAuthorization(sql, req.user, id);
+    if (!isAuthorized) {
+      return res.status(403).json({
+        detail: 'Access denied: Clinician is not authorized to access this patient\'s health records.'
+      });
+    }
+
+    // 2. Fetch patient demographics
+    const patientRows = await sql`
+      SELECT 
+        COALESCE(p.id, u.id) as id,
+        u.id as user_id,
+        COALESCE(p.full_name, u.full_name, 'Patient Record') as "patientName",
+        COALESCE(p.age, 35) as age,
+        COALESCE(p.gender, 'M') as gender,
+        COALESCE(p.blood_group, 'O+') as "bloodGroup",
+        COALESCE(p.chronic_conditions, 'Under Clinical Observation') as "primaryCondition",
+        p.allergies,
+        u.email,
+        p.phone
+      FROM users u
+      LEFT JOIN patients p ON (p.user_id = u.id OR p.id = u.id)
+      WHERE u.id = ${id} OR p.id = ${id} OR p.user_id = ${id}
+      LIMIT 1;
+    `;
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({ detail: 'Patient record not found.' });
+    }
+
+    const patient = patientRows[0];
+
+    // 3. Fetch all medical reports for this patient
+    const reports = await sql`
+      SELECT id, report_name, report_type, hospital, doctor, status, date,
+             parameters, structured_data, ai_explanation, created_at
+      FROM medical_reports
+      WHERE user_id = ${patient.user_id} 
+         OR user_id = ${id}
+         OR patient_id = ${patient.id} 
+         OR patient_id = ${id}
+      ORDER BY date ASC, created_at ASC;
+    `;
+
+    // 4. Extract parameters across reports
+    const paramSeriesMap = new Map();
+
+    reports.forEach(rep => {
+      const repDate = rep.date || (rep.created_at ? new Date(rep.created_at).toISOString().split('T')[0] : '2026-10-30');
+      const rawParams = Array.isArray(rep.parameters) ? rep.parameters : [];
+
+      rawParams.forEach(p => {
+        const rawName = (p.name || p.test_name || '').trim();
+        if (!rawName) return;
+
+        const val = parseFloat(p.patient_value !== undefined ? p.patient_value : p.value);
+        if (isNaN(val)) return;
+
+        const unit = p.unit || '';
+        const refRange = p.reference_range || p.referenceRange || 'Standard clinical range';
+        const rawStatus = String(p.status || p.flag || 'Normal');
+        const isBelow = rawStatus.toLowerCase().includes('below') || rawStatus.toLowerCase().includes('low');
+        const isAbove = rawStatus.toLowerCase().includes('above') || rawStatus.toLowerCase().includes('high');
+        const isCritical = Boolean(p.is_critical || rawStatus.toLowerCase().includes('crit'));
+        const status = isCritical ? 'Critical' : isBelow ? 'Low' : isAbove ? 'High' : 'Normal';
+
+        // Categorize parameter
+        let category = 'Laboratory Biomarkers';
+        const lowerName = rawName.toLowerCase();
+        if (lowerName.includes('hemoglobin') || lowerName.includes('rbc') || lowerName.includes('platelet') || lowerName.includes('wbc') || lowerName.includes('esr')) {
+          category = 'Hematology (CBC)';
+        } else if (lowerName.includes('glucose') || lowerName.includes('sugar') || lowerName.includes('hba1c') || lowerName.includes('fbs') || lowerName.includes('ppbs')) {
+          category = 'Glycemic Control';
+        } else if (lowerName.includes('cholesterol') || lowerName.includes('triglyceride') || lowerName.includes('hdl') || lowerName.includes('ldl') || lowerName.includes('lipid')) {
+          category = 'Lipid Profile';
+        } else if (lowerName.includes('creatinine') || lowerName.includes('urea') || lowerName.includes('bun') || lowerName.includes('uric')) {
+          category = 'Renal Function (RFT)';
+        } else if (lowerName.includes('pressure') || lowerName.includes('systolic') || lowerName.includes('diastolic') || lowerName.includes('heart') || lowerName.includes('pulse') || lowerName.includes('spo2') || lowerName.includes('weight')) {
+          category = 'Physiological Vitals';
+        } else if (lowerName.includes('tsh') || lowerName.includes('thyroid') || lowerName.includes('t3') || lowerName.includes('t4')) {
+          category = 'Endocrine & Thyroid';
+        } else if (lowerName.includes('bilirubin') || lowerName.includes('sgpt') || lowerName.includes('sgot') || lowerName.includes('alt') || lowerName.includes('ast')) {
+          category = 'Hepatic Function (LFT)';
+        }
+
+        // Canonical series key
+        const seriesKey = lowerName.replace(/[^a-z0-9]/g, '_');
+
+        if (!paramSeriesMap.has(seriesKey)) {
+          // Parse numerical bounds from reference range if possible
+          let refMin = null;
+          let refMax = null;
+          const rangeMatch = refRange.match(/(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)/i);
+          if (rangeMatch) {
+            refMin = parseFloat(rangeMatch[1]);
+            refMax = parseFloat(rangeMatch[2]);
+          }
+
+          paramSeriesMap.set(seriesKey, {
+            id: seriesKey,
+            parameterName: rawName,
+            category: category,
+            unit: unit,
+            referenceRange: refRange,
+            refMin: refMin,
+            refMax: refMax,
+            readings: []
+          });
+        }
+
+        const series = paramSeriesMap.get(seriesKey);
+        series.readings.push({
+          date: repDate,
+          timestamp: new Date(repDate).getTime() || Date.now(),
+          value: val,
+          unit: unit,
+          referenceRange: refRange,
+          status: status,
+          isCritical: isCritical,
+          reportId: rep.id,
+          reportName: rep.report_name
+        });
+      });
+    });
+
+    // 5. Build structured trend summaries & deltas
+    const trends = [];
+    paramSeriesMap.forEach(series => {
+      series.readings.sort((a, b) => a.timestamp - b.timestamp);
+      const count = series.readings.length;
+      const latestReading = series.readings[count - 1];
+      const previousReading = count > 1 ? series.readings[count - 2] : null;
+
+      let deltaValue = null;
+      let percentChange = null;
+      let trendDirection = 'stable';
+
+      if (previousReading) {
+        deltaValue = Number((latestReading.value - previousReading.value).toFixed(2));
+        percentChange = previousReading.value !== 0 ? Number(((deltaValue / previousReading.value) * 100).toFixed(1)) : 0;
+        trendDirection = deltaValue > 0.05 ? 'increased' : deltaValue < -0.05 ? 'decreased' : 'stable';
+      }
+
+      trends.push({
+        ...series,
+        readingCount: count,
+        hasSufficientData: count >= 2,
+        latestReading: latestReading,
+        previousReading: previousReading,
+        deltaValue: deltaValue,
+        percentChange: percentChange,
+        trendDirection: trendDirection
+      });
+    });
+
+    // Sort trends: abnormal parameters first, then by reading count descending
+    trends.sort((a, b) => {
+      const aAbn = a.latestReading?.status !== 'Normal';
+      const bAbn = b.latestReading?.status !== 'Normal';
+      if (aAbn && !bAbn) return -1;
+      if (!aAbn && bAbn) return 1;
+      return b.readingCount - a.readingCount;
+    });
+
+    return res.json({
+      patient: {
+        patientId: patient.user_id,
+        id: patient.id,
+        patientName: patient.patientName,
+        age: patient.age,
+        gender: patient.gender,
+        bloodGroup: patient.bloodGroup,
+        primaryCondition: patient.primaryCondition,
+        totalReports: reports.length
+      },
+      summary: {
+        totalReportsAnalyzed: reports.length,
+        parametersTracked: trends.length,
+        hasSufficientHistoricalData: trends.some(t => t.hasSufficientData),
+        oldestDate: reports[0]?.date || null,
+        latestDate: reports[reports.length - 1]?.date || null
+      },
+      trends: trends
+    });
+  } catch (err) {
+    console.error('Error fetching patient health trends:', err);
+    return res.status(500).json({ detail: `Failed to fetch health trends: ${err.message}` });
+  }
+});
+
+// ==========================================
+// DOCTOR EARLY WARNINGS (REAL DATABASE INTEGRATION)
+// ==========================================
+app.get(['/doctor/patients/:id/early-warnings', '/api/doctor/patients/:id/early-warnings'], authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    // 1. Validate authorization
+    const isAuthorized = await checkDoctorPatientAuthorization(sql, req.user, id);
+    if (!isAuthorized) {
+      return res.status(403).json({
+        detail: 'Access denied: Clinician is not authorized to access this patient\'s early warnings.'
+      });
+    }
+
+    // 2. Fetch patient demographics
+    const patientRows = await sql`
+      SELECT 
+        COALESCE(p.id, u.id) as id,
+        u.id as user_id,
+        COALESCE(p.full_name, u.full_name, 'Patient Record') as "patientName",
+        COALESCE(p.age, 35) as age,
+        COALESCE(p.gender, 'M') as gender,
+        COALESCE(p.blood_group, 'O+') as "bloodGroup",
+        COALESCE(p.chronic_conditions, 'Under Observation') as "primaryCondition",
+        p.allergies
+      FROM users u
+      LEFT JOIN patients p ON (p.user_id = u.id OR p.id = u.id)
+      WHERE u.id = ${id} OR p.id = ${id} OR p.user_id = ${id}
+      LIMIT 1;
+    `;
+
+    if (patientRows.length === 0) {
+      return res.status(404).json({ detail: 'Patient record not found.' });
+    }
+
+    const patient = patientRows[0];
+
+    // 3. Fetch patient medical reports
+    const reports = await sql`
+      SELECT id, report_name, report_type, hospital, doctor, status, date,
+             parameters, structured_data, ai_explanation, created_at
+      FROM medical_reports
+      WHERE user_id = ${patient.user_id} 
+         OR user_id = ${id}
+         OR patient_id = ${patient.id} 
+         OR patient_id = ${id}
+      ORDER BY date ASC, created_at ASC;
+    `;
+
+    // 4. Fetch patient documented allergies
+    const allergies = await sql`
+      SELECT allergen, category, reaction, severity, date_identified, notes, verification_status
+      FROM patient_allergies
+      WHERE patient_id = ${patient.user_id} OR patient_id = ${id}
+      ORDER BY severity DESC;
+    `;
+
+    // 5. Fetch acknowledged warnings from audit_logs
+    const ackRows = await sql`
+      SELECT resource_id, details, created_at
+      FROM audit_logs
+      WHERE action = 'EARLY_WARNING_ACKNOWLEDGED'
+        AND (details->>'patient_id' = ${id} OR details->>'patient_id' = ${patient.user_id})
+      ORDER BY created_at DESC;
+    `;
+    const acknowledgedSet = new Set(ackRows.map(r => r.resource_id));
+
+    // 6. Build chronological parameter map for trend-based alerts
+    const paramSeriesMap = new Map();
+    reports.forEach(rep => {
+      const repDate = rep.date || (rep.created_at ? new Date(rep.created_at).toISOString().split('T')[0] : '2026-10-30');
+      const rawParams = Array.isArray(rep.parameters) ? rep.parameters : [];
+
+      rawParams.forEach(p => {
+        const rawName = (p.name || p.test_name || '').trim();
+        if (!rawName) return;
+
+        const val = parseFloat(p.patient_value !== undefined ? p.patient_value : p.value);
+        if (isNaN(val)) return;
+
+        const unit = p.unit || '';
+        const refRange = p.reference_range || p.referenceRange || 'Standard reference bounds';
+        const rawStatus = String(p.status || p.flag || 'Normal');
+        const isBelow = rawStatus.toLowerCase().includes('below') || rawStatus.toLowerCase().includes('low');
+        const isAbove = rawStatus.toLowerCase().includes('above') || rawStatus.toLowerCase().includes('high');
+        const isCritical = Boolean(p.is_critical || rawStatus.toLowerCase().includes('crit'));
+        const status = isCritical ? 'Critical' : isBelow ? 'Low' : isAbove ? 'High' : 'Normal';
+
+        const sKey = rawName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        if (!paramSeriesMap.has(sKey)) {
+          paramSeriesMap.set(sKey, {
+            parameterName: rawName,
+            unit: unit,
+            referenceRange: refRange,
+            readings: []
+          });
+        }
+
+        paramSeriesMap.get(sKey).readings.push({
+          date: repDate,
+          timestamp: new Date(repDate).getTime() || Date.now(),
+          value: val,
+          unit: unit,
+          referenceRange: refRange,
+          status: status,
+          isCritical: isCritical,
+          meaning: p.meaning || '',
+          possibleReasons: p.possible_reasons || '',
+          explanation: p.explanation || '',
+          reportId: rep.id,
+          reportName: rep.report_name
+        });
+      });
+    });
+
+    const warnings = [];
+
+    // Check 1: Abnormal laboratory results in latest report
+    paramSeriesMap.forEach(series => {
+      series.readings.sort((a, b) => a.timestamp - b.timestamp);
+      const latest = series.readings[series.readings.length - 1];
+      const previous = series.readings.length > 1 ? series.readings[series.readings.length - 2] : null;
+
+      if (latest.status !== 'Normal') {
+        const isCritical = latest.isCritical || latest.status === 'Critical';
+        let priority = isCritical ? 'Critical' : 'Moderate';
+        
+        // Elevate priority for major clinical biomarkers
+        const lowerName = series.parameterName.toLowerCase();
+        if (lowerName.includes('glucose') && (latest.value >= 126 || latest.value <= 55)) priority = 'High';
+        if (lowerName.includes('hemoglobin') && latest.value < 11.0) priority = 'High';
+        if (lowerName.includes('cholesterol') && latest.value >= 220) priority = 'High';
+        if (lowerName.includes('creatinine') && latest.value >= 1.4) priority = 'High';
+
+        const prevContext = previous 
+          ? `Previous test: ${previous.value} ${previous.unit} on ${previous.date} (${previous.status})` 
+          : 'Baseline record on file';
+
+        const warnId = `warn_${series.parameterName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${latest.date}`;
+        const isAck = acknowledgedSet.has(warnId);
+
+        warnings.push({
+          id: warnId,
+          title: `${latest.status === 'High' ? 'Elevated' : 'Low'} ${series.parameterName} (${latest.value} ${latest.unit})`,
+          parameter: series.parameterName,
+          actualValue: `${latest.value} ${latest.unit}`,
+          numericValue: latest.value,
+          unit: latest.unit,
+          referenceRange: latest.referenceRange,
+          reportDate: latest.date,
+          reportName: latest.reportName,
+          reportId: latest.reportId,
+          reason: latest.explanation || latest.possibleReasons || `Observed value of ${latest.value} ${latest.unit} is outside normal laboratory bounds (${latest.referenceRange}).`,
+          previousReadings: prevContext,
+          priority: priority,
+          status: isAck ? 'Reviewed by Clinician' : 'Pending Clinician Review',
+          isReviewed: isAck,
+          detectedDate: latest.date,
+          aiDisclaimer: 'Automated clinical decision support alert for attending physician evaluation. This is not a confirmed diagnosis.'
+        });
+      }
+
+      // Check 2: Repeated Out-of-Range Parameters
+      if (previous && previous.status !== 'Normal' && latest.status !== 'Normal') {
+        const warnId = `warn_repeated_${series.parameterName.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        const isAck = acknowledgedSet.has(warnId);
+
+        warnings.push({
+          id: warnId,
+          title: `Persistent Out-of-Range ${series.parameterName}`,
+          parameter: series.parameterName,
+          actualValue: `${latest.value} ${latest.unit}`,
+          numericValue: latest.value,
+          unit: latest.unit,
+          referenceRange: latest.referenceRange,
+          reportDate: latest.date,
+          reportName: latest.reportName,
+          reportId: latest.reportId,
+          reason: `Repeated abnormal measurement across consecutive evaluations (${previous.date} and ${latest.date}). Indicates persistent physiological deviation requiring clinical reassessment.`,
+          previousReadings: `${previous.date}: ${previous.value} ${previous.unit} ➔ ${latest.date}: ${latest.value} ${latest.unit}`,
+          priority: 'High',
+          status: isAck ? 'Reviewed by Clinician' : 'Pending Clinician Review',
+          isReviewed: isAck,
+          detectedDate: latest.date,
+          aiDisclaimer: 'Automated clinical decision support alert for attending physician evaluation. This is not a confirmed diagnosis.'
+        });
+      }
+
+      // Check 3: Significant Shift between Reports
+      if (previous) {
+        const delta = Number((latest.value - previous.value).toFixed(2));
+        const lowerName = series.parameterName.toLowerCase();
+
+        // Hemoglobin drop >= 0.7 g/dL
+        if (lowerName.includes('hemoglobin') && delta <= -0.7) {
+          const warnId = `warn_shift_hb_${latest.date}`;
+          const isAck = acknowledgedSet.has(warnId);
+
+          warnings.push({
+            id: warnId,
+            title: `Rapid Hemoglobin Reduction (${delta} g/dL)`,
+            parameter: series.parameterName,
+            actualValue: `${latest.value} ${latest.unit}`,
+            numericValue: latest.value,
+            unit: latest.unit,
+            referenceRange: latest.referenceRange,
+            reportDate: latest.date,
+            reportName: latest.reportName,
+            reportId: latest.reportId,
+            reason: `Circulating hemoglobin dropped from ${previous.value} to ${latest.value} g/dL between ${previous.date} and ${latest.date}. Evaluate for occult blood loss, nutritional deficit, or hemolysis.`,
+            previousReadings: `Dropped by ${Math.abs(delta)} g/dL from ${previous.date} (${previous.value} g/dL)`,
+            priority: 'High',
+            status: isAck ? 'Reviewed by Clinician' : 'Pending Clinician Review',
+            isReviewed: isAck,
+            detectedDate: latest.date,
+            aiDisclaimer: 'Automated clinical decision support alert for attending physician evaluation. This is not a confirmed diagnosis.'
+          });
+        }
+
+        // Fasting glucose spike >= 20 mg/dL
+        if (lowerName.includes('glucose') && delta >= 20) {
+          const warnId = `warn_shift_glucose_${latest.date}`;
+          const isAck = acknowledgedSet.has(warnId);
+
+          warnings.push({
+            id: warnId,
+            title: `Acute Glycemic Elevation (+${delta} mg/dL)`,
+            parameter: series.parameterName,
+            actualValue: `${latest.value} ${latest.unit}`,
+            numericValue: latest.value,
+            unit: latest.unit,
+            referenceRange: latest.referenceRange,
+            reportDate: latest.date,
+            reportName: latest.reportName,
+            reportId: latest.reportId,
+            reason: `Fasting blood glucose increased by +${delta} mg/dL compared to previous test on ${previous.date}. Review patient dietary adherence and anti-diabetic regimen.`,
+            previousReadings: `Rose from ${previous.value} mg/dL (${previous.date}) to ${latest.value} mg/dL (${latest.date})`,
+            priority: 'High',
+            status: isAck ? 'Reviewed by Clinician' : 'Pending Clinician Review',
+            isReviewed: isAck,
+            detectedDate: latest.date,
+            aiDisclaimer: 'Automated clinical decision support alert for attending physician evaluation. This is not a confirmed diagnosis.'
+          });
+        }
+      }
+    });
+
+    // Check 4: Documented Severe Allergies
+    allergies.forEach(all => {
+      const sev = (all.severity || '').toLowerCase();
+      if (sev === 'high' || sev === 'critical' || sev === 'severe') {
+        const warnId = `warn_allergy_${all.allergen.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        const isAck = acknowledgedSet.has(warnId);
+
+        warnings.push({
+          id: warnId,
+          title: `Severe Allergy Advisory: ${all.allergen}`,
+          parameter: 'Drug Hypersensitivity Alert',
+          actualValue: all.reaction || 'Severe Hypersensitivity',
+          referenceRange: 'Clinical Contraindication',
+          reportDate: all.date_identified || 'Documented History',
+          reportName: 'Electronic Allergy Record',
+          reason: `Patient has documented ${all.severity} hypersensitivity reaction (${all.reaction || 'Severe adverse event'}) to ${all.allergen}. Cross-check all active and planned prescriptions.`,
+          previousReadings: all.notes ? `Clinical notes: ${all.notes}` : 'Verified in patient safety ledger',
+          priority: 'High',
+          status: isAck ? 'Reviewed by Clinician' : 'Active Safety Advisory',
+          isReviewed: isAck,
+          detectedDate: all.date_identified || 'On File',
+          aiDisclaimer: 'Automated clinical decision support alert for attending physician evaluation. This is not a confirmed diagnosis.'
+        });
+      }
+    });
+
+    // Sort warnings: Critical > High > Moderate
+    const priorityWeight = { Critical: 3, High: 2, Moderate: 1, Low: 0 };
+    warnings.sort((a, b) => (priorityWeight[b.priority] || 0) - (priorityWeight[a.priority] || 0));
+
+    return res.json({
+      patient: {
+        patientId: patient.user_id,
+        id: patient.id,
+        patientName: patient.patientName,
+        age: patient.age,
+        gender: patient.gender,
+        bloodGroup: patient.bloodGroup,
+        primaryCondition: patient.primaryCondition
+      },
+      warningCount: warnings.length,
+      warnings: warnings
+    });
+  } catch (err) {
+    console.error('Error fetching patient early warnings:', err);
+    return res.status(500).json({ detail: `Failed to fetch early warnings: ${err.message}` });
+  }
+});
+
+// Acknowledge / Review Early Warning
+app.post(['/doctor/patients/:id/early-warnings/:warningId/review', '/api/doctor/patients/:id/early-warnings/:warningId/review'], authenticateToken, async (req, res) => {
+  try {
+    const { id, warningId } = req.params;
+    const { notes } = req.body || {};
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const isAuthorized = await checkDoctorPatientAuthorization(sql, req.user, id);
+    if (!isAuthorized) {
+      return res.status(403).json({ detail: 'Access denied: Clinician is not authorized to review alerts for this patient.' });
+    }
+
+    const logId = 'warn_rev_' + crypto.randomBytes(6).toString('hex');
+    await sql`
+      INSERT INTO audit_logs (id, user_id, user_role, action, resource, resource_id, details, ip_address)
+      VALUES (
+        ${logId}, 
+        ${req.user.id}, 
+        ${req.user.role || 'doctor'}, 
+        'EARLY_WARNING_ACKNOWLEDGED', 
+        'EARLY_WARNING', 
+        ${warningId}, 
+        ${JSON.stringify({ patient_id: id, warning_id: warningId, clinician_notes: notes || 'Reviewed and acknowledged by attending physician', reviewed_at: new Date().toISOString() })}::jsonb, 
+        ${req.ip || '127.0.0.1'}
+      );
+    `;
+
+    return res.json({
+      success: true,
+      status: 'Reviewed by Clinician',
+      warningId: warningId,
+      acknowledgedAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error reviewing early warning:', err);
+    return res.status(500).json({ detail: `Failed to review early warning: ${err.message}` });
   }
 });
 
