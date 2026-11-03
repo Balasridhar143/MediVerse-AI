@@ -17,7 +17,12 @@ import {
   Layers,
   Sparkles,
   X,
-  FileText
+  FileText,
+  Utensils,
+  Archive,
+  HelpCircle,
+  ShieldAlert,
+  Compass
 } from 'lucide-react';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -91,7 +96,7 @@ export default function MedicineKnowledgeBase() {
         badge="Pharmacopeia & Therapeutics"
         badgeStatus="CDSCO & WHO EML Aligned"
         title="Medicine Knowledge Base"
-        subtitle="Authoritative pharmacology, mechanisms of action, approved indications, and clinical safety precautions."
+        subtitle="Authoritative pharmacology, mechanisms of action, approved indications, and clinical safety precautions across verified Indian medicines."
       />
 
       {/* Safety Notice Banner */}
@@ -99,8 +104,33 @@ export default function MedicineKnowledgeBase() {
         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
         <div className="text-xs text-amber-900 leading-relaxed">
           <span className="font-bold">CLINICAL SAFETY MANDATE: </span>
-          Reference dosage ranges and pharmacology provided are clinical reference standards derived from CDSCO, WHO EML, and NLEM India.
+          Reference dosage ranges and pharmacology provided are clinical standards derived from CDSCO, WHO EML, and NLEM India.
           They <span className="font-bold underline">MUST NOT</span> be construed as individualized prescriptions. Never adjust, initiate, or discontinue medications without evaluation by a registered medical doctor or licensed pharmacist.
+        </div>
+      </div>
+
+      {/* Educational Banner: Understanding Generic vs. Brand Name */}
+      <div className="p-4.5 bg-gradient-to-r from-teal-50 to-blue-50 border border-teal-200 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-2xs">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+            <HelpCircle className="w-5 h-5" />
+          </div>
+          <div className="space-y-1">
+            <h4 className="font-bold text-slate-900 text-sm">
+              Understanding Generic vs. Brand Name
+            </h4>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-3xl">
+              <strong>Generic Name:</strong> The globally recognized active chemical ingredient (e.g., <em>Paracetamol</em>, <em>Amoxicillin</em>) approved by international health authorities.
+              <br />
+              <strong>Brand Name:</strong> The proprietary trade name chosen by the pharmaceutical manufacturer (e.g., <em>Dolo 650</em>, <em>Augmentin</em>). Both contain the identical active molecule meeting identical pharmacopeial bioequivalence, purity, and clinical efficacy standards.
+            </p>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <span className="text-[11px] font-bold text-teal-800 bg-white px-3 py-1.5 rounded-lg border border-teal-200 inline-flex items-center gap-1.5 shadow-2xs">
+            <ShieldCheck className="w-3.5 h-3.5 text-teal-600" />
+            Verified Bioequivalence
+          </span>
         </div>
       </div>
 
@@ -117,7 +147,7 @@ export default function MedicineKnowledgeBase() {
                 setSearch(e.target.value);
                 setOffset(0);
               }}
-              placeholder="Search by Brand, Generic, Active Ingredient, or Use (e.g. Paracetamol, Augmentin, Metformin)..."
+              placeholder="Search by Brand, Generic, Active Molecule, or Category (e.g. Paracetamol, Augmentin, Metformin, Ciplox)..."
               className="w-full pl-9 pr-4 py-2 text-xs border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-hidden"
             />
           </div>
@@ -200,7 +230,7 @@ export default function MedicineKnowledgeBase() {
       {loading ? (
         <div className="p-16 text-center bg-white border border-slate-200 rounded-xl">
           <div className="w-8 h-8 border-3 border-teal-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-xs font-semibold text-slate-600">Querying clinical pharmacological index...</p>
+          <p className="text-xs font-semibold text-slate-600">Querying verified clinical pharmacological catalog...</p>
         </div>
       ) : medicines.length === 0 ? (
         <div className="p-16 text-center bg-white border border-slate-200 rounded-xl space-y-3">
@@ -237,7 +267,7 @@ export default function MedicineKnowledgeBase() {
                     {med.brand_name}
                   </h3>
                   <p className="text-xs text-slate-500 font-mono mt-0.5">
-                    {med.generic_name}
+                    Generic: {med.generic_name}
                   </p>
                 </div>
 
@@ -256,7 +286,13 @@ export default function MedicineKnowledgeBase() {
                   </p>
                 </div>
 
-                {/* Strength & Pricing */}
+                {/* Route of Administration & Food instruction preview */}
+                <div className="text-[11px] text-slate-500 bg-slate-50 p-2 rounded-lg space-y-1 border border-slate-100">
+                  <p><span className="font-semibold text-slate-700">Route: </span>{med.route_of_administration || 'Oral'}</p>
+                  <p className="truncate"><span className="font-semibold text-slate-700">Food: </span>{med.food_instructions || 'With water after food'}</p>
+                </div>
+
+                {/* Pack Size & Pricing */}
                 <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-100">
                   <span>Pack: {med.pack_size || 'Standard Unit'}</span>
                   {med.price_inr && (
@@ -273,7 +309,7 @@ export default function MedicineKnowledgeBase() {
                   onClick={() => openMonograph(med)}
                   className="w-full text-xs font-bold justify-center"
                 >
-                  Clinical Monograph
+                  View Clinical Monograph
                 </Button>
               </div>
             </div>
@@ -308,26 +344,29 @@ export default function MedicineKnowledgeBase() {
         </div>
       )}
 
-      {/* Detailed Clinical Monograph Modal */}
+      {/* Detailed Clinical Monograph Modal with all 16 attributes */}
       {selectedMedicine && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-200">
+          <div className="bg-white rounded-2xl max-w-4xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-slate-200">
             {/* Modal Header */}
-            <div className="p-5 border-b border-slate-200 flex items-start justify-between bg-slate-50/70 sticky top-0 backdrop-blur-xs z-10">
+            <div className="p-5 border-b border-slate-200 flex items-start justify-between bg-slate-50/80 sticky top-0 backdrop-blur-xs z-10">
               <div>
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                   <span className="text-[10px] font-bold uppercase tracking-wider bg-teal-100 text-teal-800 px-2 py-0.5 rounded">
                     {selectedMedicine.category}
                   </span>
                   <span className="text-[10px] font-bold text-slate-600 bg-slate-200 px-2 py-0.5 rounded">
                     {selectedMedicine.prescription_classification || (selectedMedicine.prescription_required ? 'Schedule H' : 'General')}
                   </span>
+                  <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                    Route: {selectedMedicine.route_of_administration || 'Oral'}
+                  </span>
                 </div>
-                <h2 className="text-lg font-black text-slate-900">
+                <h2 className="text-xl font-black text-slate-900">
                   {selectedMedicine.brand_name}
                 </h2>
                 <p className="text-xs text-slate-600 font-mono mt-0.5">
-                  Generic: {selectedMedicine.generic_name}
+                  Generic Non-Proprietary Name: <strong>{selectedMedicine.generic_name}</strong>
                 </p>
               </div>
 
@@ -340,103 +379,195 @@ export default function MedicineKnowledgeBase() {
               </button>
             </div>
 
-            {/* Modal Body */}
+            {/* Modal Body: Complete 16 Core Clinical Attributes */}
             <div className="p-6 space-y-6 text-xs text-slate-700">
-              {/* Pharmacology & Mechanism */}
+              {/* 1. Generic vs Brand Educational Breakdown */}
+              <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl space-y-1.5">
+                <div className="flex items-center gap-2 text-blue-900 font-bold text-xs">
+                  <Info className="w-4 h-4 text-blue-700 shrink-0" />
+                  <span>Generic vs. Brand Name Distinction</span>
+                </div>
+                <p className="text-blue-950 text-xs leading-relaxed">
+                  {selectedMedicine.generic_vs_brand_explanation}
+                </p>
+              </div>
+
+              {/* 2. Active Ingredients & Drug Class */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                    <Pill className="w-4 h-4 text-teal-600" />
+                    Active Pharmaceutical Ingredients (API)
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {(selectedMedicine.active_ingredients || [selectedMedicine.generic_name]).map((act, aIdx) => (
+                      <span key={aIdx} className="bg-white border border-slate-300 text-slate-800 px-2 py-1 rounded text-[11px] font-semibold">
+                        {act}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                    <Layers className="w-4 h-4 text-teal-600" />
+                    Pharmacological Drug Class
+                  </h4>
+                  <p className="text-teal-900 font-bold text-xs pt-1">
+                    {selectedMedicine.drug_classification || selectedMedicine.category}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Therapeutic nature: {selectedMedicine.treats_nature || 'Underlying Medical Management'}
+                  </p>
+                </div>
+              </div>
+
+              {/* 3. Mechanism of Action ("How it works in the body") */}
               <div className="space-y-1.5">
                 <h4 className="font-bold text-slate-900 text-xs flex items-center gap-2">
                   <Activity className="w-4 h-4 text-teal-700" />
-                  Mechanism of Action (Pharmacodynamics)
+                  How the Medicine Works in the Body (Mechanism of Action)
                 </h4>
-                <p className="leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-200">
-                  {selectedMedicine.mechanism_of_action || 'Pharmacological mechanism details aligned with clinical literature.'}
+                <p className="leading-relaxed bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-slate-800 text-xs leading-relaxed">
+                  {selectedMedicine.mechanism_of_action}
                 </p>
               </div>
 
-              {/* General Reference Dosage (Strict Reference Notice) */}
-              <div className="space-y-1.5 p-3.5 bg-teal-50/70 border border-teal-200 rounded-xl">
-                <h4 className="font-bold text-teal-950 text-xs flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-teal-700" />
-                  General Reference Dosage (Clinical Standard — Not an Individual Prescription)
+              {/* 4. What the medicine is used for (Approved Indications) */}
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-xs flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-teal-700" />
+                  What the Medicine is Used For (Approved Indications)
                 </h4>
-                <p className="leading-relaxed text-teal-900 text-xs">
-                  {selectedMedicine.general_approved_dosage || selectedMedicine.reference_dosage || 'Dosage is individualized based on patient clinical status and renal clearance.'}
-                </p>
-                {selectedMedicine.administration_instructions && (
-                  <p className="text-[11px] text-teal-800 font-semibold pt-1">
-                    Route & Administration: {selectedMedicine.administration_instructions}
-                  </p>
-                )}
-              </div>
-
-              {/* Indications */}
-              {selectedMedicine.conditions_indicated && selectedMedicine.conditions_indicated.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="font-bold text-slate-900 text-xs">Approved Clinical Indications</h4>
-                  <ul className="space-y-1.5 list-disc pl-4 text-slate-600">
-                    {selectedMedicine.conditions_indicated.map((ind, iIdx) => (
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                  <ul className="space-y-1.5 list-disc pl-4 text-slate-700 text-xs">
+                    {(selectedMedicine.approved_indications || selectedMedicine.conditions_indicated || []).map((ind, iIdx) => (
                       <li key={iIdx}>{ind}</li>
                     ))}
                   </ul>
                 </div>
-              )}
+              </div>
 
-              {/* Adverse Effects & Warnings */}
+              {/* 5. Food-Related Instructions & Administration Guidance */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1.5">
-                  <h5 className="font-bold text-slate-800 text-xs">Common Adverse Effects</h5>
+                <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1.5">
+                  <h4 className="font-bold text-amber-950 text-xs flex items-center gap-1.5">
+                    <Utensils className="w-4 h-4 text-amber-700" />
+                    Food-Related Instructions & Meal Timing
+                  </h4>
+                  <p className="text-amber-900 text-xs leading-relaxed">
+                    {selectedMedicine.food_instructions || selectedMedicine.food_interactions}
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-teal-50/70 border border-teal-200 rounded-xl space-y-1.5">
+                  <h4 className="font-bold text-teal-950 text-xs flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-teal-700" />
+                    Reference Clinical Dosing & Administration
+                  </h4>
+                  <p className="text-teal-900 text-xs leading-relaxed">
+                    {selectedMedicine.reference_dosage || selectedMedicine.general_approved_dosage}
+                  </p>
+                  <p className="text-[11px] text-teal-800 font-semibold pt-1">
+                    Route: {selectedMedicine.route_of_administration}
+                  </p>
+                </div>
+              </div>
+
+              {/* 6. Adverse Effects: Common vs. Serious Warnings */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <h5 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-slate-600" />
+                    Common Side Effects
+                  </h5>
                   <ul className="space-y-1 text-slate-600 text-[11px] list-disc pl-3">
-                    {(selectedMedicine.common_side_effects || ['Mild gastrointestinal upset', 'Headache']).map((eff, eIdx) => (
+                    {(selectedMedicine.common_side_effects || []).map((eff, eIdx) => (
                       <li key={eIdx}>{eff}</li>
                     ))}
                   </ul>
                 </div>
 
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg space-y-1.5">
+                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-2">
                   <h5 className="font-bold text-rose-900 text-xs flex items-center gap-1.5">
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                    Serious Warnings & Contraindications
+                    <ShieldAlert className="w-4 h-4 text-rose-600" />
+                    Serious Side Effects & Warning Signs (Seek Urgent Care)
                   </h5>
                   <ul className="space-y-1 text-rose-800 text-[11px] list-disc pl-3">
-                    {(selectedMedicine.serious_adverse_effects || selectedMedicine.contraindications || ['Hypersensitivity reactions']).map((warn, wIdx) => (
+                    {(selectedMedicine.serious_adverse_effects || selectedMedicine.important_warnings || []).map((warn, wIdx) => (
                       <li key={wIdx}>{warn}</li>
                     ))}
                   </ul>
                 </div>
               </div>
 
-              {/* Precautions: Pregnancy & Pediatric */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2 text-[11px]">
-                <h5 className="font-bold text-slate-800 text-xs">Special Population Precautions</h5>
-                <p><span className="font-semibold text-slate-700">Pregnancy: </span>{selectedMedicine.pregnancy_precautions || 'Consult obstetrician before administration.'}</p>
+              {/* 7. Contraindications & Drug Interactions */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                    Contraindications & Precautions
+                  </h5>
+                  <ul className="space-y-1 text-slate-700 text-[11px] list-disc pl-3">
+                    {(selectedMedicine.contraindications || []).map((c, cIdx) => (
+                      <li key={cIdx}>{c}</li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Compass className="w-4 h-4 text-blue-600" />
+                    Known Medicine Interactions
+                  </h5>
+                  <ul className="space-y-1 text-slate-700 text-[11px] list-disc pl-3">
+                    {(selectedMedicine.drug_interactions || []).map((d, dIdx) => (
+                      <li key={dIdx}>{d}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {/* 8. Available Strengths, Dosage Forms & Storage Instructions */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <h5 className="font-bold text-slate-900 text-xs">Available Strengths & Dosage Forms</h5>
+                  <p className="text-slate-600 text-[11px]">
+                    <span className="font-semibold text-slate-800">Strengths: </span>
+                    {(selectedMedicine.available_strengths || []).join(', ')}
+                  </p>
+                  <p className="text-slate-600 text-[11px]">
+                    <span className="font-semibold text-slate-800">Dosage Forms: </span>
+                    {(selectedMedicine.dosage_forms || []).join(', ')}
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                  <h5 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                    <Archive className="w-4 h-4 text-slate-600" />
+                    Storage Instructions
+                  </h5>
+                  <p className="text-slate-700 text-[11px] leading-relaxed">
+                    {selectedMedicine.storage_instructions}
+                  </p>
+                </div>
+              </div>
+
+              {/* 9. Special Population Precautions */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 text-[11px]">
+                <h5 className="font-bold text-slate-800 text-xs">Special Population Guidance</h5>
+                <p><span className="font-semibold text-slate-700">Pregnancy: </span>{selectedMedicine.pregnancy_precautions || 'Consult prescribing obstetrician before use.'}</p>
                 <p><span className="font-semibold text-slate-700">Breastfeeding: </span>{selectedMedicine.breastfeeding_precautions || 'Assess maternal benefit vs infant risk.'}</p>
                 <p><span className="font-semibold text-slate-700">Pediatric / Geriatric: </span>{selectedMedicine.age_related_precautions || 'Dose adjustment required based on body weight and organ clearance.'}</p>
               </div>
 
-              {/* Related Medicines in Class */}
-              {relatedMedicines.length > 0 && (
-                <div className="space-y-2 pt-2 border-t border-slate-200">
-                  <h4 className="font-bold text-slate-900 text-xs">Related Therapeutics in Same Drug Class</h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {relatedMedicines.map((rel) => (
-                      <div
-                        key={rel.id}
-                        onClick={() => openMonograph(rel)}
-                        className="p-2.5 bg-slate-50 hover:bg-teal-50 border border-slate-200 rounded-lg cursor-pointer transition-colors"
-                      >
-                        <p className="font-bold text-slate-800 text-xs">{rel.brand_name}</p>
-                        <p className="text-[10px] text-slate-500 font-mono">{rel.generic_name}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Citations & Verified Authorities */}
-              <div className="p-3 bg-slate-100 rounded-lg text-[10px] text-slate-500 space-y-1">
-                <p className="font-bold text-slate-700">Authoritative Sources:</p>
-                <p>{selectedMedicine.medical_source || 'Central Drugs Standard Control Organisation (CDSCO), Govt of India / WHO Model List of Essential Medicines / National List of Essential Medicines (NLEM India 2022)'}</p>
-                <p className="italic">Last verified: {selectedMedicine.last_verification_date || '2026-Q1'}</p>
+              {/* 10. Statutory Safety Notice */}
+              <div className="p-3.5 bg-slate-100 border border-slate-200 rounded-xl text-[11px] text-slate-600 space-y-1">
+                <p className="font-bold text-slate-800">Important Safety Information:</p>
+                <p>{selectedMedicine.safety_information}</p>
+                <p className="text-[10px] text-slate-500 pt-1">
+                  <strong>Source Authorities: </strong>{selectedMedicine.medical_source} • Last Verified: {selectedMedicine.last_verification_date || '2026-Q1'}
+                </p>
               </div>
             </div>
 

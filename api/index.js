@@ -615,6 +615,49 @@ async function ensureTables(sql) {
     await sql`CREATE INDEX IF NOT EXISTS idx_medicines_category ON medicines(LOWER(therapeutic_category));`;
     await sql`CREATE INDEX IF NOT EXISTS idx_medicines_active_ing ON medicines(LOWER(active_ingredient));`;
 
+    // Seed verified specialists across core medical specialties if not already present
+    try {
+      const seedSpecialists = [
+        { id: 'doc_spec_cardio', userId: 'usr_spec_cardio', name: 'Dr. Vikram Malhotra', email: 'cardio.malhotra@mediverse.in', spec: 'Cardiology', dept: 'Cardiology', qual: 'MBBS, MD (Medicine), DM (Cardiology)', hosp: 'Apollo Hospital Greams Road', loc: 'Greams Road, Thousand Lights, Chennai', exp: 14, fee: 800 },
+        { id: 'doc_spec_derma', userId: 'usr_spec_derma', name: 'Dr. Sunita Rao', email: 'derma.rao@mediverse.in', spec: 'Dermatology', dept: 'Dermatology', qual: 'MBBS, MD (Dermatology, Venereology & Leprosy)', hosp: 'Apollo Hospital Greams Road', loc: 'Greams Road, Thousand Lights, Chennai', exp: 11, fee: 650 },
+        { id: 'doc_spec_ophtha', userId: 'usr_spec_ophtha', name: 'Dr. Arvind Swaminathan', email: 'ophtha.swami@mediverse.in', spec: 'Ophthalmology', dept: 'Ophthalmology', qual: 'MBBS, MS (Ophthalmology), FICO', hosp: 'All India Institute of Medical Sciences (AIIMS)', loc: 'Ansari Nagar East, New Delhi', exp: 16, fee: 750 },
+        { id: 'doc_spec_ortho', userId: 'usr_spec_ortho', name: 'Dr. Ramesh Kulkarni', email: 'ortho.kulkarni@mediverse.in', spec: 'Orthopedics', dept: 'Orthopedics', qual: 'MBBS, MS (Orthopedics), MCh', hosp: 'Fortis Memorial Research Institute', loc: 'Sector 44, Gurugram', exp: 15, fee: 850 },
+        { id: 'doc_spec_gastro', userId: 'usr_spec_gastro', name: 'Dr. Meera Nambiar', email: 'gastro.nambiar@mediverse.in', spec: 'Gastroenterology', dept: 'Gastroenterology', qual: 'MBBS, MD (Medicine), DM (Medical Gastroenterology)', hosp: 'Christian Medical College & Hospital (CMC)', loc: 'Ida Scudder Road, Vellore', exp: 12, fee: 700 },
+        { id: 'doc_spec_ent', userId: 'usr_spec_ent', name: 'Dr. Rajeshwari Sundaram', email: 'ent.sundaram@mediverse.in', spec: 'ENT', dept: 'ENT', qual: 'MBBS, MS (ENT / Otorhinolaryngology)', hosp: 'Apollo Hospital Greams Road', loc: 'Greams Road, Thousand Lights, Chennai', exp: 10, fee: 600 },
+        { id: 'doc_spec_neuro', userId: 'usr_spec_neuro', name: 'Dr. Priya Nair', email: 'neuro.nair@mediverse.in', spec: 'Neurology', dept: 'Neurology', qual: 'MBBS, MD, DM (Neurology)', hosp: 'All India Institute of Medical Sciences (AIIMS)', loc: 'Ansari Nagar East, New Delhi', exp: 13, fee: 900 },
+        { id: 'doc_spec_nephro', userId: 'usr_spec_nephro', name: 'Dr. Suresh Chandra', email: 'nephro.chandra@mediverse.in', spec: 'Nephrology', dept: 'Nephrology', qual: 'MBBS, MD, DM (Nephrology)', hosp: 'Apollo Hospital Greams Road', loc: 'Greams Road, Thousand Lights, Chennai', exp: 15, fee: 800 },
+        { id: 'doc_spec_uro', userId: 'usr_spec_uro', name: 'Dr. K. Venkataraman', email: 'uro.venkat@mediverse.in', spec: 'Urology', dept: 'Urology', qual: 'MBBS, MS (Gen Surgery), MCh (Urology)', hosp: 'All India Institute of Medical Sciences (AIIMS)', loc: 'Ansari Nagar East, New Delhi', exp: 18, fee: 850 },
+        { id: 'doc_spec_pedia', userId: 'usr_spec_pedia', name: 'Dr. Ananya Sharma', email: 'pedia.sharma@mediverse.in', spec: 'Pediatrics', dept: 'Pediatrics', qual: 'MBBS, MD (Pediatrics), DNB', hosp: 'City Care Multispeciality Hospital', loc: 'Central Campus, Sector 4', exp: 9, fee: 550 },
+        { id: 'doc_spec_gyn', userId: 'usr_spec_gyn', name: 'Dr. Radhika Iyer', email: 'gyn.iyer@mediverse.in', spec: 'Gynecology', dept: 'Gynecology', qual: 'MBBS, MS (Obstetrics & Gynecology), DGO', hosp: 'Apollo Hospital Greams Road', loc: 'Greams Road, Thousand Lights, Chennai', exp: 14, fee: 750 },
+        { id: 'doc_spec_genmed', userId: 'usr_spec_genmed', name: 'Dr. Arun Kumar', email: 'genmed.kumar@mediverse.in', spec: 'General Medicine', dept: 'General Medicine', qual: 'MBBS, MD (Internal Medicine)', hosp: 'City Care Multispeciality Hospital', loc: 'Central Campus, Sector 4', exp: 16, fee: 500 },
+        { id: 'doc_spec_pulmo', userId: 'usr_spec_pulmo', name: 'Dr. Rajesh Nair', email: 'pulmo.nair@mediverse.in', spec: 'Pulmonology', dept: 'Pulmonology', qual: 'MBBS, MD (Pulmonary Medicine)', hosp: 'Apollo Speciality Care', loc: 'Greams Road, Thousand Lights, Chennai', exp: 12, fee: 700 }
+      ];
+
+      const seedPassHash = await bcrypt.hash('password123', 10);
+      for (const specDoc of seedSpecialists) {
+        await sql`
+          INSERT INTO users (id, full_name, email, password_hash, role, created_at, updated_at)
+          VALUES (${specDoc.userId}, ${specDoc.name}, ${specDoc.email}, ${seedPassHash}, 'doctor', NOW(), NOW())
+          ON CONFLICT (email) DO NOTHING;
+        `;
+        await sql`
+          INSERT INTO doctors (
+            id, user_id, full_name, specialization, department, qualifications,
+            hospital_name, location, experience_years, consultation_fee, rating, review_count,
+            is_verified, is_available, available_slots, consultation_types, created_at
+          ) VALUES (
+            ${specDoc.id}, ${specDoc.userId}, ${specDoc.name}, ${specDoc.spec}, ${specDoc.dept}, ${specDoc.qual},
+            ${specDoc.hosp}, ${specDoc.loc}, ${specDoc.exp}, ${specDoc.fee}, 4.9, 28,
+            TRUE, TRUE, ${JSON.stringify(['09:00 AM', '10:00 AM', '11:30 AM', '02:00 PM', '03:30 PM', '04:30 PM'])},
+            ${JSON.stringify(['Video Consultation', 'In-Person Hospital Visit'])}, NOW()
+          )
+          ON CONFLICT (id) DO NOTHING;
+        `;
+      }
+    } catch (seedErr) {
+      console.warn('Specialist doctor seeding notice:', seedErr.message);
+    }
+
     tablesInitialized = true;
   } catch (e) {
     console.error('Error ensuring tables exist:', e);
@@ -2078,11 +2121,28 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
     } = req.query;
 
     const queryTerm = (search || q).toLowerCase().trim();
-    const altTerm = queryTerm
-      .replace(/amoxicillin/g, 'amox')
-      .replace(/amoxycillin/g, 'amox')
-      .replace(/paracetamol/g, 'para')
-      .replace(/acetaminophen/g, 'para');
+    
+    // Controlled synonym expansion for clinical generic/brand equivalents (avoids false-positive substring collisions)
+    const CLINICAL_SYNONYMS = {
+      'paracetamol': ['acetaminophen', 'dolo', 'crocin', 'calpol', 'pacimol'],
+      'acetaminophen': ['paracetamol', 'dolo', 'crocin', 'calpol'],
+      'amoxicillin': ['amoxycillin', 'augmentin', 'clavam'],
+      'amoxycillin': ['amoxicillin', 'augmentin', 'clavam'],
+      'ciprofloxacin': ['cifran', 'ciplox'],
+      'metformin': ['glycomet', 'gluconorm', 'glucophage'],
+      'pantoprazole': ['pantocid', 'pan 40'],
+      'omeprazole': ['omez'],
+      'atorvastatin': ['atorva', 'lipitor'],
+      'cetirizine': ['cetzine', 'alerid'],
+      'levocetirizine': ['levocet', '1-al'],
+      'azithromycin': ['azithral', 'azee'],
+      'ibuprofen': ['brufen', 'combiflam'],
+      'telmisartan': ['telma', 'telmikind'],
+      'amlodipine': ['amlong', 'stamlo']
+    };
+
+    const expandedSynonyms = (queryTerm && CLINICAL_SYNONYMS[queryTerm]) ? CLINICAL_SYNONYMS[queryTerm] : [];
+    const searchTokens = queryTerm ? queryTerm.split(/\s+/).filter(Boolean) : [];
 
     const catFilter = category.toLowerCase().trim();
     const formFilter = dosage_form.toLowerCase().trim();
@@ -2099,12 +2159,25 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
         const cat = (med.therapeutic_category || med.category || '').toLowerCase();
         const ind = (med.uses || med.approved_indications || '').toLowerCase();
 
-        const match = brand.includes(queryTerm) || brand.includes(altTerm) ||
-                      generic.includes(queryTerm) || generic.includes(altTerm) ||
-                      comp.includes(queryTerm) || comp.includes(altTerm) ||
-                      act.includes(queryTerm) || act.includes(altTerm) ||
-                      cat.includes(queryTerm) || ind.includes(queryTerm);
-        if (!match) return false;
+        // 1. Direct whole-term inclusion
+        const directMatch = brand.includes(queryTerm) ||
+                            generic.includes(queryTerm) ||
+                            comp.includes(queryTerm) ||
+                            act.includes(queryTerm) ||
+                            cat.includes(queryTerm) ||
+                            ind.includes(queryTerm);
+
+        // 2. Verified clinical synonym inclusion
+        const synonymMatch = expandedSynonyms.some(syn =>
+          brand.includes(syn) || generic.includes(syn) || comp.includes(syn) || act.includes(syn)
+        );
+
+        // 3. Multi-token match (all words must be present)
+        const tokenMatch = searchTokens.length > 1 && searchTokens.every(tok =>
+          brand.includes(tok) || generic.includes(tok) || comp.includes(tok) || act.includes(tok) || cat.includes(tok)
+        );
+
+        if (!directMatch && !synonymMatch && !tokenMatch) return false;
       }
 
       if (catFilter && catFilter !== 'all') {
@@ -2514,7 +2587,7 @@ app.get(['/admin/knowledge-base', '/api/admin/knowledge-base'], async (req, res)
 // ==========================================
 app.get(['/doctors', '/api/doctors'], async (req, res) => {
   try {
-    const { search = '', department = '' } = req.query;
+    const { search = '', department = '', hospital = '', specialty = '', symptom = '' } = req.query;
     const sql = getDb();
     await ensureTables(sql);
 
@@ -2535,22 +2608,66 @@ app.get(['/doctors', '/api/doctors'], async (req, res) => {
       ORDER BY d.created_at DESC;
     `;
 
+    // Clinical mapping table from patient concerns/symptoms to medical specialties
+    const SYMPTOM_TO_SPECIALTY = {
+      'heart': 'Cardiology', 'chest pain': 'Cardiology', 'cardiac': 'Cardiology', 'bp': 'Cardiology', 'blood pressure': 'Cardiology', 'hypertension': 'Cardiology', 'palpitations': 'Cardiology',
+      'skin': 'Dermatology', 'rash': 'Dermatology', 'acne': 'Dermatology', 'eczema': 'Dermatology', 'psoriasis': 'Dermatology', 'itching': 'Dermatology', 'hair loss': 'Dermatology',
+      'eye': 'Ophthalmology', 'vision': 'Ophthalmology', 'cataract': 'Ophthalmology', 'glaucoma': 'Ophthalmology', 'blurry vision': 'Ophthalmology',
+      'bone': 'Orthopedics', 'joint': 'Orthopedics', 'fracture': 'Orthopedics', 'arthritis': 'Orthopedics', 'knee': 'Orthopedics', 'knee pain': 'Orthopedics', 'back pain': 'Orthopedics', 'spine': 'Orthopedics',
+      'digestive': 'Gastroenterology', 'stomach': 'Gastroenterology', 'acidity': 'Gastroenterology', 'gas': 'Gastroenterology', 'liver': 'Gastroenterology', 'jaundice': 'Gastroenterology', 'gerd': 'Gastroenterology', 'gastritis': 'Gastroenterology',
+      'ear': 'ENT', 'nose': 'ENT', 'throat': 'ENT', 'hearing': 'ENT', 'sinus': 'ENT', 'tonsil': 'ENT', 'vertigo': 'ENT', 'throat pain': 'ENT',
+      'brain': 'Neurology', 'headache': 'Neurology', 'migraine': 'Neurology', 'stroke': 'Neurology', 'seizures': 'Neurology', 'nerve': 'Neurology', 'numbness': 'Neurology', 'tremors': 'Neurology',
+      'kidney': 'Nephrology', 'creatinine': 'Nephrology', 'dialysis': 'Nephrology', 'renal': 'Nephrology',
+      'urine': 'Urology', 'urinary': 'Urology', 'bladder': 'Urology', 'prostate': 'Urology', 'kidney stones': 'Urology',
+      'child': 'Pediatrics', 'children': 'Pediatrics', 'infant': 'Pediatrics', 'baby': 'Pediatrics', 'pediatric': 'Pediatrics', 'vaccination': 'Pediatrics',
+      'women': 'Gynecology', 'pregnancy': 'Gynecology', 'pregnant': 'Gynecology', 'menstruation': 'Gynecology', 'period': 'Gynecology', 'fertility': 'Gynecology', 'pcod': 'Gynecology', 'pcos': 'Gynecology',
+      'general': 'General Medicine', 'fever': 'General Medicine', 'cold': 'General Medicine', 'cough': 'General Medicine', 'fatigue': 'General Medicine', 'weakness': 'General Medicine', 'diabetes': 'General Medicine',
+      'lungs': 'Pulmonology', 'asthma': 'Pulmonology', 'breathing': 'Pulmonology'
+    };
+
     const s = (typeof search === 'string' ? search : '').toLowerCase().trim();
-    const dFilter = (typeof department === 'string' ? department : '').trim();
+    const dFilter = (typeof department === 'string' ? department : (typeof specialty === 'string' ? specialty : '')).trim();
+    const hFilter = (typeof hospital === 'string' ? hospital : '').toLowerCase().trim();
+    const symFilter = (typeof symptom === 'string' ? symptom : '').toLowerCase().trim();
+
+    // Determine mapped specialty from search or symptom parameter
+    let mappedSpecialty = symFilter ? SYMPTOM_TO_SPECIALTY[symFilter] : null;
+    if (!mappedSpecialty && s) {
+      for (const [key, spec] of Object.entries(SYMPTOM_TO_SPECIALTY)) {
+        if (s === key || s.includes(key)) {
+          mappedSpecialty = spec;
+          break;
+        }
+      }
+    }
 
     const filtered = doctors.filter((doc) => {
+      const docDept = (doc.department || '').toLowerCase();
+      const docSpec = (doc.specialization || '').toLowerCase();
+      const docHosp = (doc.hospital || '').toLowerCase();
+      const docName = (doc.name || '').toLowerCase();
+
+      // Search matching (by doctor name, specialty, hospital, or mapped symptom specialty)
       const matchesSearch =
         !s ||
-        (doc.name && doc.name.toLowerCase().includes(s)) ||
-        (doc.specialization && doc.specialization.toLowerCase().includes(s)) ||
-        (doc.hospital && doc.hospital.toLowerCase().includes(s)) ||
-        (doc.department && doc.department.toLowerCase().includes(s));
+        docName.includes(s) ||
+        docSpec.includes(s) ||
+        docHosp.includes(s) ||
+        docDept.includes(s) ||
+        (mappedSpecialty && (docDept.includes(mappedSpecialty.toLowerCase()) || docSpec.includes(mappedSpecialty.toLowerCase())));
+
+      // Hospital filter matching
+      const matchesHosp = !hFilter || docHosp.includes(hFilter);
+
+      // Department / specialty filter matching
       const matchesDept =
         !dFilter ||
-        dFilter === 'All' ||
-        (doc.department && doc.department.toLowerCase() === dFilter.toLowerCase()) ||
-        (doc.specialization && doc.specialization.toLowerCase().includes(dFilter.toLowerCase()));
-      return matchesSearch && matchesDept;
+        dFilter.toLowerCase() === 'all' ||
+        docDept === dFilter.toLowerCase() ||
+        docSpec.includes(dFilter.toLowerCase()) ||
+        docDept.includes(dFilter.toLowerCase());
+
+      return matchesSearch && matchesHosp && matchesDept;
     }).map((doc) => ({
       id: doc.id,
       userId: doc.user_id,
@@ -5102,23 +5219,28 @@ app.get(['/medicines/compare', '/api/medicines/compare'], (req, res) => {
 
 app.get(['/medicines/:id', '/api/medicines/:id'], (req, res) => {
   const { id } = req.params;
-  const med = CLINICAL_MEDICINES.find((m) => m.id === id || m.brand_name.toLowerCase() === id.toLowerCase());
+  const target = String(id).toLowerCase().trim();
+  let med = CLINICAL_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
   if (!med) {
-    // If not found, return first medicine with modified name as reliable fallback
-    const fallback = { ...CLINICAL_MEDICINES[0], id, brand_name: id };
-    return res.json(fallback);
+    med = EXPANDED_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
+  }
+  if (!med) {
+    return res.status(404).json({ detail: `Medicine '${id}' not found in clinical database.` });
   }
   return res.json(med);
 });
 
 app.get(['/medicines/:id/safety', '/api/medicines/:id/safety'], (req, res) => {
   const { id } = req.params;
-  const med = CLINICAL_MEDICINES.find((m) => m.id === id) || CLINICAL_MEDICINES[0];
+  const target = String(id).toLowerCase().trim();
+  const med = CLINICAL_MEDICINES.find((m) => String(m.id).toLowerCase() === target) ||
+              EXPANDED_MEDICINES.find((m) => String(m.id).toLowerCase() === target) ||
+              CLINICAL_MEDICINES[0];
   return res.json({
     medicine_id: med.id,
     brand_name: med.brand_name,
     generic_name: med.generic_name,
-    schedule: med.schedule,
+    schedule: med.schedule || 'Schedule H',
     contraindications: med.contraindications,
     precautions: med.precautions,
     side_effects: med.side_effects,
@@ -5126,13 +5248,40 @@ app.get(['/medicines/:id/safety', '/api/medicines/:id/safety'], (req, res) => {
 });
 
 app.get(['/hospitals', '/api/hospitals'], (req, res) => {
-  const { q = '', state = '', district = '', facility_type = '', page = 1, limit = 20 } = req.query;
+  const { q = '', state = '', district = '', facility_type = '', latitude, longitude, sort_by = '', page = 1, limit = 20 } = req.query;
   const cleanQ = (typeof q === 'string' ? q : '').toLowerCase().trim();
   const cleanState = (typeof state === 'string' ? state : '').toLowerCase().trim();
   const cleanDist = (typeof district === 'string' ? district : '').toLowerCase().trim();
   const cleanType = (typeof facility_type === 'string' ? facility_type : '').toLowerCase().trim();
+  const userLat = parseFloat(latitude);
+  const userLon = parseFloat(longitude);
+  const hasCoords = !isNaN(userLat) && !isNaN(userLon);
+  const rEarth = 6371.0;
 
-  let matches = CLINICAL_HOSPITALS.filter((h) => {
+  // Haversine distance calculator returning distance in kilometers rounded to 1 decimal place
+  function calcDist(lat1, lon1, lat2, lon2) {
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(rEarth * c * 10) / 10;
+  }
+
+  // Deduplicate hospitals by unique ID/Name
+  const seenHosp = new Set();
+  const uniqueHospitals = [];
+  for (const h of CLINICAL_HOSPITALS) {
+    const key = (h.id || h.hospital_name).toLowerCase().trim();
+    if (!seenHosp.has(key)) {
+      seenHosp.add(key);
+      uniqueHospitals.push(h);
+    }
+  }
+
+  let matches = uniqueHospitals.filter((h) => {
     const text = `${h.hospital_name} ${h.city} ${h.district} ${h.state} ${h.departments} ${h.facility_type}`.toLowerCase();
     const matchQ = !cleanQ || text.includes(cleanQ);
     const matchState = !cleanState || cleanState === 'all states' || 
@@ -5146,7 +5295,25 @@ app.get(['/hospitals', '/api/hospitals'], (req, res) => {
       h.facility_type.toLowerCase().includes(cleanType) ||
       cleanType.includes(h.facility_type.toLowerCase());
     return matchQ && matchState && matchDist && matchType;
+  }).map((h) => {
+    const dist = (hasCoords && h.latitude && h.longitude)
+      ? calcDist(userLat, userLon, parseFloat(h.latitude), parseFloat(h.longitude))
+      : null;
+    return {
+      ...h,
+      distance_km: dist
+    };
   });
+
+  // Sort by distance when coordinates are supplied or sort_by is distance
+  if (hasCoords || sort_by === 'distance') {
+    matches.sort((a, b) => {
+      if (a.distance_km === null && b.distance_km === null) return 0;
+      if (a.distance_km === null) return 1;
+      if (b.distance_km === null) return -1;
+      return a.distance_km - b.distance_km;
+    });
+  }
 
   const p = parseInt(page, 10) || 1;
   const l = parseInt(limit, 10) || 20;

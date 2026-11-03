@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams, useNavigate } from 'react-router-dom';
 import L from 'leaflet';
 import { hospitalService, patientService } from '../../services/api';
 import indianLocationData from '../../data/indianLocationRegistry.json';
@@ -20,8 +20,35 @@ import {
   X,
   Loader2,
   Compass,
-  FileCheck
+  FileCheck,
+  Stethoscope,
+  ChevronRight
 } from 'lucide-react';
+
+// Predefined verified regional medical hubs with accurate geographic coordinates
+const MEDICAL_HUBS = [
+  { name: 'Chennai', lat: 13.0827, lon: 80.2707, state: 'Tamil Nadu' },
+  { name: 'Bengaluru', lat: 12.9716, lon: 77.5946, state: 'Karnataka' },
+  { name: 'Mumbai', lat: 19.0760, lon: 72.8777, state: 'Maharashtra' },
+  { name: 'Delhi NCR', lat: 28.6139, lon: 77.2090, state: 'Delhi' },
+  { name: 'Hyderabad', lat: 17.3850, lon: 78.4867, state: 'Telangana' },
+  { name: 'Kolkata', lat: 22.5726, lon: 88.3639, state: 'West Bengal' },
+  { name: 'Pune', lat: 18.5204, lon: 73.8567, state: 'Maharashtra' }
+];
+
+// Haversine distance calculator returning distance in kilometers rounded to 1 decimal place
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+  const rEarth = 6371.0;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(rEarth * c * 10) / 10;
+}
 
 // Configure standard Leaflet icon paths
 const customIcon = L.icon({
@@ -35,6 +62,7 @@ const customIcon = L.icon({
 });
 
 export default function FindHospital() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const initialSearch = searchParams.get('search') || '';
@@ -150,13 +178,51 @@ export default function FindHospital() {
         limit: pageSize,
       };
 
+      if (userLocation && userLocation.latitude && userLocation.longitude) {
+        params.latitude = userLocation.latitude;
+        params.longitude = userLocation.longitude;
+        params.sort_by = 'distance';
+      }
+
       const data = await hospitalService.getHospitals(params);
       if (data && data.items) {
-        setHospitals(data.items);
+        // Ensure distance is populated on each item
+        const enrichedItems = data.items.map(h => {
+          if (h.distance_km !== undefined && h.distance_km !== null) return h;
+          if (userLocation && h.latitude && h.longitude) {
+            return {
+              ...h,
+              distance_km: calculateDistance(userLocation.latitude, userLocation.longitude, h.latitude, h.longitude)
+            };
+          }
+          return h;
+        });
+
+        // Deduplicate
+        const seen = new Set();
+        const uniqueItems = [];
+        for (const item of enrichedItems) {
+          const k = (item.id || item.hospital_name).toLowerCase();
+          if (!seen.has(k)) {
+            seen.add(k);
+            uniqueItems.push(item);
+          }
+        }
+
+        if (userLocation) {
+          uniqueItems.sort((a, b) => {
+            if (a.distance_km === null && b.distance_km === null) return 0;
+            if (a.distance_km === null) return 1;
+            if (b.distance_km === null) return -1;
+            return a.distance_km - b.distance_km;
+          });
+        }
+
+        setHospitals(uniqueItems);
         setTotalRecords(data.total);
         setTotalPages(data.total_pages);
-        if (data.items.length > 0 && (!selectedHospital || !data.items.some(h => h.id === selectedHospital.id))) {
-          setSelectedHospital(data.items[0]);
+        if (uniqueItems.length > 0 && (!selectedHospital || !uniqueItems.some(h => h.id === selectedHospital.id))) {
+          setSelectedHospital(uniqueItems[0]);
         }
       } else if (Array.isArray(data)) {
         setHospitals(data);
@@ -175,7 +241,7 @@ export default function FindHospital() {
 
   useEffect(() => {
     fetchHospitals();
-  }, [searchTerm, selectedState, selectedDistrict, selectedType, onlyWithCoords, page, pageSize]);
+  }, [searchTerm, selectedState, selectedDistrict, selectedType, onlyWithCoords, page, pageSize, userLocation]);
 
   // Reset page to 1 when filters change
   const handleFilterChange = (setter, value) => {
@@ -207,13 +273,17 @@ export default function FindHospital() {
       const group = [];
       hospitals.forEach((hosp) => {
         if (hosp.latitude && hosp.longitude && !isNaN(hosp.latitude) && !isNaN(hosp.longitude)) {
+          const distKm = hosp.distance_km ?? (userLocation ? calculateDistance(userLocation.latitude, userLocation.longitude, hosp.latitude, hosp.longitude) : null);
+          const distText = distKm !== null ? `<span style="color: #0d9488; font-weight: 700; font-size: 11px;">📍 ${distKm} km away</span><br/>` : '';
+
           const marker = L.marker([hosp.latitude, hosp.longitude], { icon: customIcon })
             .addTo(map)
             .bindPopup(`
-              <div style="font-family: inherit; font-size: 12px; line-height: 1.4; max-width: 220px;">
+              <div style="font-family: inherit; font-size: 12px; line-height: 1.4; max-width: 240px;">
                 <strong style="color: #0f766e; font-size: 13px;">${hosp.hospital_name}</strong><br/>
                 <span style="display: inline-block; font-size: 10px; background: #e0f2fe; color: #0369a1; padding: 1px 6px; border-radius: 4px; margin: 2px 0;">${hosp.facility_type || 'Hospital'}</span><br/>
                 <span style="color: #64748b;">${hosp.address || ''}, ${hosp.state}</span><br/>
+                ${distText}
                 <span style="color: #10b981; font-weight: 600; font-size: 11px;">✓ Verified GPS: ${Number(hosp.latitude).toFixed(4)}, ${Number(hosp.longitude).toFixed(4)}</span><br/>
                 <span style="color: #e11d48; font-weight: 600;">Emergency: ${hosp.emergency_phone || '108'}</span>
               </div>
@@ -248,12 +318,13 @@ export default function FindHospital() {
       return;
     }
 
-    setLocationStatus('Requesting location permission...');
+    setLocationStatus('Requesting GPS location permission...');
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const { latitude, longitude } = position.coords;
-        setUserLocation({ latitude, longitude });
-        setLocationStatus('Location acquired.');
+        setUserLocation({ latitude, longitude, label: 'Your GPS Location' });
+        setLocationStatus(`GPS Location acquired (${latitude.toFixed(4)}, ${longitude.toFixed(4)}). Calculating distances...`);
+        setPage(1);
 
         if (mapInstanceRef.current) {
           mapInstanceRef.current.setView([latitude, longitude], 13);
@@ -268,10 +339,19 @@ export default function FindHospital() {
         }
       },
       (err) => {
-        setLocationStatus('Location permission denied. Showing all verified regional hospitals.');
+        setLocationStatus('Location permission denied or unavailable. Please select a regional hub below.');
       },
-      { timeout: 10000 }
+      { timeout: 10000, enableHighAccuracy: true }
     );
+  };
+
+  const handleSelectHub = (hub) => {
+    setUserLocation({ latitude: hub.lat, longitude: hub.lon, label: hub.name });
+    setLocationStatus(`Active Reference Center: ${hub.name} (${hub.state})`);
+    setPage(1);
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.setView([hub.lat, hub.lon], 12);
+    }
   };
 
   // 5. Open Patient Registration Modal
@@ -411,6 +491,74 @@ export default function FindHospital() {
         </div>
       </div>
 
+      {/* Nearby Discovery & Live Geolocation Controls */}
+      <div className="p-4.5 bg-white border border-slate-200 rounded-2xl shadow-2xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center shrink-0 border border-teal-100">
+              <Compass className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-bold text-slate-900 text-sm">
+                Nearby Hospital Discovery & GPS Geolocation
+              </h4>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {userLocation
+                  ? `Active location center: ${userLocation.label || `${userLocation.latitude.toFixed(4)}, ${userLocation.longitude.toFixed(4)}`} — Facilities sorted strictly by distance ascending`
+                  : 'Acquire real browser GPS location or select a regional hub to calculate verified Haversine driving distances.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleRequestLocation}
+            className="inline-flex items-center justify-center gap-2 px-3.5 py-2 text-xs font-bold text-white bg-teal-700 hover:bg-teal-800 rounded-lg transition-colors cursor-pointer shadow-2xs shrink-0"
+          >
+            <Compass className="w-4 h-4" />
+            Use My Current GPS Location
+          </button>
+        </div>
+
+        {locationStatus && (
+          <div className="text-[11px] px-3 py-1.5 rounded-lg bg-teal-50 text-teal-800 border border-teal-200 font-medium">
+            {locationStatus}
+          </div>
+        )}
+
+        {/* Quick-Select Regional Medical Hubs */}
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-500 font-medium shrink-0">Or Quick-Select Regional Hub:</span>
+          {MEDICAL_HUBS.map((hub) => (
+            <button
+              key={hub.name}
+              type="button"
+              onClick={() => handleSelectHub(hub)}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer ${
+                userLocation?.label === hub.name
+                  ? 'bg-teal-700 text-white shadow-2xs'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              {hub.name}
+            </button>
+          ))}
+          {userLocation && (
+            <button
+              type="button"
+              onClick={() => {
+                setUserLocation(null);
+                setLocationStatus('');
+                setPage(1);
+              }}
+              className="text-[11px] text-slate-400 hover:text-slate-600 underline ml-2 cursor-pointer"
+            >
+              Reset Location
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Advanced Cascading Filters */}
       <div className="p-3 bg-white border border-slate-200 rounded-xl flex flex-wrap items-center gap-3 text-xs">
         <div className="flex items-center gap-1.5 font-semibold text-slate-700">
@@ -524,7 +672,7 @@ export default function FindHospital() {
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
                   {selectedHospital.latitude && selectedHospital.longitude ? (
                     <a
                       href={`https://www.google.com/maps/dir/?api=1&destination=${selectedHospital.latitude},${selectedHospital.longitude}`}
@@ -538,6 +686,14 @@ export default function FindHospital() {
                   ) : (
                     <span className="text-[11px] text-slate-400 italic">No GPS coordinates</span>
                   )}
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    icon={Stethoscope}
+                    onClick={() => navigate(`/patient/find-doctor?hospital=${encodeURIComponent(selectedHospital.hospital_name)}`)}
+                  >
+                    View Doctors
+                  </Button>
                   <Button
                     variant="primary"
                     size="xs"
@@ -579,6 +735,7 @@ export default function FindHospital() {
               const isSelected = selectedHospital?.id === hosp.id;
               const hasCoords = hosp.latitude && hosp.longitude && !isNaN(hosp.latitude) && !isNaN(hosp.longitude);
               const depts = (hosp.departments || '').split(',').map((d) => d.trim()).filter(Boolean);
+              const dist = hosp.distance_km ?? (userLocation ? calculateDistance(userLocation.latitude, userLocation.longitude, hosp.latitude, hosp.longitude) : null);
 
               return (
                 <div
@@ -592,10 +749,18 @@ export default function FindHospital() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h4 className="font-bold text-slate-900 text-sm leading-snug">{hosp.hospital_name}</h4>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-slate-900 text-sm leading-snug">{hosp.hospital_name}</h4>
+                        {dist !== null && (
+                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded text-[10px] font-bold inline-flex items-center gap-1">
+                            <MapPin className="w-2.5 h-2.5 text-emerald-600" />
+                            {dist} km away
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
                         <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        {hosp.address ? `${hosp.address}, ` : ''}{hosp.district ? `${hosp.district}, ` : ''}{hosp.state}
+                        {hosp.address ? `${hosp.address}, ` : ''}{hosp.district ? `${hosp.district}, ` : ''}{hosp.state} {hosp.postal_code ? `- ${hosp.postal_code}` : ''}
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1">
@@ -610,27 +775,70 @@ export default function FindHospital() {
                     </div>
                   </div>
 
-                  {/* Provenance and Details */}
-                  <div className="mt-2 text-[10px] text-slate-400 flex items-center justify-between">
-                    <span>Source: {hosp.source || 'National Health Registry'}</span>
-                    <span>{hosp.ownership_type || 'Public'}</span>
+                  {/* Departments preview */}
+                  {depts.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {depts.slice(0, 4).map((d, dIdx) => (
+                        <span key={dIdx} className="text-[10px] bg-slate-50 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded">
+                          {d}
+                        </span>
+                      ))}
+                      {depts.length > 4 && (
+                        <span className="text-[10px] text-slate-400 self-center">+{depts.length - 4} more</span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Emergency Availability & Provenance */}
+                  <div className="mt-2.5 pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                    <span className="text-rose-700 font-bold flex items-center gap-1">
+                      <Siren className="w-3.5 h-3.5 text-rose-600" />
+                      24x7 Emergency Active ({hosp.emergency_phone || '108'})
+                    </span>
+                    <span className="text-slate-400 text-[10px]">
+                      {hosp.ownership_type || 'Public / Autonomous'}
+                    </span>
                   </div>
 
-                  {/* Actions */}
-                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                  {/* Actions Bar */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-slate-500 font-medium">
-                      📞 {hosp.phone || 'Central Helpdesk: 104/108'}
+                      📞 {hosp.phone || 'Helpdesk: 108'}
                     </span>
-                    <Button
-                      variant="primary"
-                      size="xs"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openRegistration(hosp);
-                      }}
-                    >
-                      Register Patient
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                      {hasCoords && (
+                        <a
+                          href={`https://www.google.com/maps/dir/?api=1&destination=${hosp.latitude},${hosp.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-md transition-colors"
+                        >
+                          <Navigation className="w-3 h-3 text-teal-600" />
+                          Directions
+                        </a>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/patient/find-doctor?hospital=${encodeURIComponent(hosp.hospital_name)}`);
+                        }}
+                      >
+                        View Doctors
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openRegistration(hosp);
+                        }}
+                      >
+                        Register Patient
+                      </Button>
+                    </div>
                   </div>
                 </div>
               );

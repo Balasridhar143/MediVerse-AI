@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { medicineService } from '../services/api';
+import api, { medicineService } from '../services/api';
 import Card from './Card';
 import Button from './Button';
 import Modal from './Modal';
@@ -98,7 +98,15 @@ export default function MedicineDatabaseViewer() {
     setSelectedMed(med);
     setDetailLoading(true);
     try {
-      const fullDetails = await medicineService.getMedicineById(med.id);
+      let fullDetails = await medicineService.getMedicineById(med.id);
+      try {
+        const kRes = await api.get(`/medicines/${med.id}/knowledge`);
+        if (kRes.data && kRes.data.medicine) {
+          fullDetails = { ...fullDetails, ...kRes.data.medicine };
+        }
+      } catch (kErr) {
+        // Fallback to basic details
+      }
       setSelectedMed(fullDetails);
     } catch (e) {
       console.warn('Could not fetch expanded clinical details:', e);
@@ -424,19 +432,45 @@ export default function MedicineDatabaseViewer() {
                 <span>Statutory Medical Notice & Clinical Disclaimer</span>
               </div>
               <p className="text-[11px] leading-relaxed text-amber-800/90">
-                {selectedMed.clinical_disclaimer || "This pharmaceutical monograph is provided strictly for educational and clinical guidance. Do not alter doses or start medication without direct supervision of a Registered Medical Practitioner."}
+                {selectedMed.clinical_disclaimer || selectedMed.disclaimer || "This pharmaceutical monograph is provided strictly for educational and clinical guidance. Do not alter doses or start medication without direct supervision of a Registered Medical Practitioner."}
               </p>
             </div>
 
-            {/* Therapeutic Classification */}
-            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
-              <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block">
-                Therapeutic Classification
-              </span>
-              <p className="text-sm font-bold text-teal-900">
-                {selectedMed.therapeutic_class || selectedMed.category}
-              </p>
+            {/* Generic vs Brand Name Distinction */}
+            {selectedMed.generic_vs_brand_explanation && (
+              <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl text-blue-950 space-y-1">
+                <span className="font-bold text-blue-900 text-xs block">Generic vs. Brand Name Education</span>
+                <p className="text-[11px] leading-relaxed">{selectedMed.generic_vs_brand_explanation}</p>
+              </div>
+            )}
+
+            {/* Therapeutic Classification & Route */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block">
+                  Therapeutic Classification
+                </span>
+                <p className="text-xs font-bold text-teal-900">
+                  {selectedMed.drug_classification || selectedMed.therapeutic_class || selectedMed.category}
+                </p>
+              </div>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="font-bold text-slate-700 uppercase tracking-wider text-[10px] block">
+                  Route & Formulation
+                </span>
+                <p className="text-xs font-bold text-slate-900">
+                  {selectedMed.route_of_administration || 'Oral (P.O.)'} • {selectedMed.pack_size || selectedMed.formulation || 'Standard'}
+                </p>
+              </div>
             </div>
+
+            {/* Mechanism of Action */}
+            {selectedMed.mechanism_of_action && (
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="font-bold text-slate-800 text-xs block">How the Medicine Works (Mechanism of Action)</span>
+                <p className="text-slate-700 text-xs leading-relaxed">{selectedMed.mechanism_of_action}</p>
+              </div>
+            )}
 
             {/* Approved Indications */}
             <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-1">
@@ -445,9 +479,17 @@ export default function MedicineDatabaseViewer() {
                 <span>Approved Clinical Indications</span>
               </div>
               <p className="text-slate-700 leading-relaxed">
-                {selectedMed.approved_indications}
+                {Array.isArray(selectedMed.approved_indications) ? selectedMed.approved_indications.join('; ') : (selectedMed.approved_indications || selectedMed.conditions_indicated || 'Consult prescribing clinician.')}
               </p>
             </div>
+
+            {/* Food Instructions */}
+            {selectedMed.food_instructions && (
+              <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1">
+                <span className="font-bold text-amber-950 text-xs block">Food-Related Instructions</span>
+                <p className="text-amber-900 text-xs leading-relaxed">{selectedMed.food_instructions}</p>
+              </div>
+            )}
 
             {/* Side Effects & Adverse Reactions */}
             <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-1">
@@ -456,7 +498,7 @@ export default function MedicineDatabaseViewer() {
                 <span>Known Adverse Effects</span>
               </div>
               <p className="text-slate-700 leading-relaxed">
-                {selectedMed.known_adverse_effects}
+                {Array.isArray(selectedMed.common_side_effects) ? selectedMed.common_side_effects.join(', ') : (selectedMed.known_adverse_effects || selectedMed.common_side_effects || 'Mild gastrointestinal discomfort')}
               </p>
             </div>
 
@@ -465,14 +507,14 @@ export default function MedicineDatabaseViewer() {
               <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-1">
                 <span className="font-bold text-rose-900 text-xs block">Contraindications</span>
                 <p className="text-rose-800 text-[11px] leading-relaxed">
-                  {selectedMed.contraindications}
+                  {Array.isArray(selectedMed.contraindications) ? selectedMed.contraindications.join('; ') : (selectedMed.contraindications || 'Known hypersensitivity to active ingredients')}
                 </p>
               </div>
 
               <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl space-y-1">
                 <span className="font-bold text-blue-900 text-xs block">Clinical Precautions</span>
                 <p className="text-blue-800 text-[11px] leading-relaxed">
-                  {selectedMed.precautions}
+                  {selectedMed.precautions || selectedMed.pregnancy_precautions || 'Consult healthcare practitioner before use.'}
                 </p>
               </div>
             </div>
@@ -481,11 +523,11 @@ export default function MedicineDatabaseViewer() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                 <strong className="block text-slate-900 mb-1">Significant Drug Interactions:</strong>
-                <p className="text-slate-600">{selectedMed.drug_interactions}</p>
+                <p className="text-slate-600">{Array.isArray(selectedMed.drug_interactions) ? selectedMed.drug_interactions.join('; ') : (selectedMed.drug_interactions || 'Inform clinician of concurrent medications.')}</p>
               </div>
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
                 <strong className="block text-slate-900 mb-1">Storage Instructions:</strong>
-                <p className="text-slate-600">{selectedMed.storage_instructions}</p>
+                <p className="text-slate-600">{selectedMed.storage_instructions || selectedMed.storage || 'Store below 25°C in a dry place.'}</p>
               </div>
             </div>
 

@@ -358,6 +358,21 @@ export const hospitalService = {
         return matchesQ && matchesState && matchesType;
       });
 
+      if (typeof queryOrParams === 'object' && queryOrParams.latitude && queryOrParams.longitude) {
+        const uLat = parseFloat(queryOrParams.latitude);
+        const uLon = parseFloat(queryOrParams.longitude);
+        filtered = filtered.map(h => {
+          if (h.latitude && h.longitude) {
+            const dLat = (h.latitude - uLat) * (Math.PI / 180);
+            const dLon = (h.longitude - uLon) * (Math.PI / 180);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(uLat * Math.PI / 180) * Math.cos(h.latitude * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return { ...h, distance_km: Math.round(6371 * c * 10) / 10 };
+          }
+          return { ...h, distance_km: null };
+        }).sort((a, b) => (a.distance_km || 99999) - (b.distance_km || 99999));
+      }
+
       return {
         items: filtered,
         total: 51094,
