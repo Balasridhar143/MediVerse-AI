@@ -1179,7 +1179,7 @@ function matchKeyword(text, keyword) {
  * Enriches any medicine record with authoritative CDSCO / WHO / NLEM pharmacological metadata.
  * Complies with the 16 core attributes required for clinical patient education.
  */
-export function enrichMedicineKnowledge(rawMed) {
+export function enrichMedicineKnowledge(rawMed, targetLanguage = 'en') {
   if (!rawMed) return null;
 
   const brandName = (rawMed.brand_name || rawMed.name || 'Clinical Medication').trim();
@@ -1214,43 +1214,28 @@ export function enrichMedicineKnowledge(rawMed) {
   // Fallback clinical template if no specific pharmacological rule matched
   if (!matchedRule) {
     matchedRule = {
-      class_id: "standard_clinical_formulation",
-      drug_class: category || "Allopathic Clinical Formulation",
-      category: category || "General Pharmaceutical Products",
-      treats_nature: "Underlying Clinical Condition (Prescription Therapeutic Management)",
-      mechanism_of_action: `Pharmacologically active therapeutic agent formulated with: ${genericName}. Acts through target physiological receptor, enzymatic pathway, or microbiological modulation to restore physiological equilibrium.`,
-      available_strengths: [rawMed.strength || "Standard Therapeutic Strength"],
-      dosage_forms: [rawMed.formulation || rawMed.dosage_form || "Tablet / Capsule / Liquid"],
-      approved_indications: [
-        `Prescription medical management corresponding to therapeutic category '${category}'.`,
-        `Conditions clinically diagnosed, evaluated, and monitored by a registered healthcare specialist.`
-      ],
-      reference_dosage: "General Reference: Dosage is strictly clinical and individualized based on patient age, body weight, renal clearance, and disease severity. Consult your prescribing physician.",
-      administration_instructions: "Take as directed on the manufacturer dispensing label with water. Do not alter dose without consultation.",
-      common_side_effects: [
-        "Mild gastrointestinal discomfort or nausea",
-        "Headache or mild lightheadedness",
-        "Dry mouth or transient fatigue"
-      ],
-      serious_adverse_effects: [
-        "Severe allergic hypersensitivity (urticarial rash, facial angioedema, breathing difficulty)",
-        "Unusual bleeding, unexplained bruising, or severe persistent dizziness"
-      ],
-      contraindications: [
-        "Known hypersensitivity to active pharmaceutical ingredients or formulation excipients",
-        "Severe hepatic or renal insufficiency unless evaluated and cleared by a clinician"
-      ],
-      drug_interactions: [
-        "Concurrent prescription medications, anticoagulants, or OTC supplements may interact. Inform your physician of all concurrent regimens."
-      ],
-      food_interactions: "Follow packaging directions regarding intake with or without meals.",
-      pregnancy_precautions: "Consult your prescribing obstetrician before use during pregnancy or planning pregnancy.",
-      breastfeeding_precautions: "Assess maternal clinical benefit against potential infant risk with your physician.",
-      age_precautions: "Pediatric and geriatric patients require physician calculation of clearance and age-appropriate dosing.",
-      storage_instructions: rawMed.storage || "Store below 25°C in a cool, dry place protected from direct sunlight and moisture. Keep strictly out of reach of children.",
-      schedule: rawMed.prescription_required ? "Schedule H Prescription Drug" : "General Healthcare Formulation",
+      class_id: "unverified_molecule",
+      drug_class: "Information currently unavailable in clinical reference",
+      category: "Information currently unavailable in clinical reference",
+      treats_nature: "Information currently unavailable in clinical reference",
+      mechanism_of_action: "Information currently unavailable in clinical reference",
+      available_strengths: [rawMed.strength || "Information currently unavailable in clinical reference"],
+      dosage_forms: [rawMed.formulation || rawMed.dosage_form || "Information currently unavailable in clinical reference"],
+      approved_indications: ["Information currently unavailable in clinical reference"],
+      reference_dosage: "Information currently unavailable in clinical reference",
+      administration_instructions: "Information currently unavailable in clinical reference",
+      common_side_effects: ["Information currently unavailable in clinical reference"],
+      serious_adverse_effects: ["Information currently unavailable in clinical reference"],
+      contraindications: ["Information currently unavailable in clinical reference"],
+      drug_interactions: ["Information currently unavailable in clinical reference"],
+      food_interactions: "Information currently unavailable in clinical reference",
+      pregnancy_precautions: "Information currently unavailable in clinical reference",
+      breastfeeding_precautions: "Information currently unavailable in clinical reference",
+      age_precautions: "Information currently unavailable in clinical reference",
+      storage_instructions: rawMed.storage || "Information currently unavailable in clinical reference",
+      schedule: rawMed.prescription_required ? "Schedule H Prescription Drug" : "Information currently unavailable in clinical reference",
       prescription_required: Boolean(rawMed.prescription_required),
-      source: "Central Drugs Standard Control Organisation (CDSCO) / Indian Pharmacopoeia"
+      source: "Information currently unavailable in clinical reference"
     };
   }
 
@@ -1299,55 +1284,235 @@ export function enrichMedicineKnowledge(rawMed) {
   // Storage instructions
   const storageInstructions = rawMed.storage || matchedRule.storage_instructions || "Store below 25°C in a cool, dry place protected from direct sunlight and moisture. Keep blister packs intact until use. Keep strictly out of reach of children.";
 
+  // Regulatory Schedule
+  const regulatorySchedule = matchedRule.schedule || (rawMed.prescription_required ? "Schedule H Prescription Drug" : "General Healthcare Formulation (OTC / Non-Scheduled)");
+
+  // Clinical Precautions synthesis
+  const clinicalPrecautionsList = [
+    matchedRule.pregnancy_precautions ? `Pregnancy: ${matchedRule.pregnancy_precautions}` : null,
+    matchedRule.breastfeeding_precautions ? `Lactation: ${matchedRule.breastfeeding_precautions}` : null,
+    matchedRule.age_precautions ? `Age Considerations: ${matchedRule.age_precautions}` : null,
+    rawMed.precautions || null
+  ].filter(Boolean);
+  if (clinicalPrecautionsList.length === 0) {
+    clinicalPrecautionsList.push("Information currently unavailable in clinical reference; consult physician or pharmacist");
+  }
+  const clinicalPrecautions = clinicalPrecautionsList.join(" • ");
+
   // Generic vs Brand educational explanation
   const genericVsBrand = `Generic Name (${genericName}) is the globally recognized non-proprietary chemical molecule approved by health authorities (WHO / CDSCO) that produces the therapeutic clinical effect. Brand Name (${brandName}) is the commercial trademark under which the manufacturer packages and markets this generic molecule. Both formulations contain the identical active pharmaceutical ingredient (API) and are bioequivalent in purity, efficacy, and clinical safety standards.`;
 
   // Safety information & Boxed Warnings
   const safetyInformation = `STATUTORY CLINICAL SAFETY NOTICE: This medication is a verified pharmaceutical preparation. Strictly follow the prescribing doctor's dosage regimen. Never self-prescribe, share, or abruptly discontinue prescription medicines without professional medical consultation. If you experience difficulty breathing, facial swelling, severe skin rash, or yellowing of the eyes/skin, seek immediate emergency medical care.`;
 
-  return {
+  // Patient-friendly explanation structure (all 6 required points)
+  const patientExplanation = {
+    what_it_does: `Acts as a therapeutic ${matchedRule.drug_class || category} designed to manage or treat ${matchedRule.approved_indications?.[0] || 'the diagnosed medical condition'}.`,
+    why_prescribed: `Clinically prescribed by doctors to treat or alleviate: ${(matchedRule.approved_indications || []).slice(0, 3).join(', ')}.`,
+    how_it_works_in_body: matchedRule.mechanism_of_action || `Works biochemically in the body by interacting with physiological target receptors to normalize cellular and systemic function.`,
+    common_side_effects: (matchedRule.common_side_effects || []).slice(0, 4).join(', ') || "Mild gastrointestinal discomfort, headache, or transient dizziness.",
+    important_precautions: `Take strictly as directed. Inform doctor about any pre-existing kidney, liver, or heart conditions. Avoid alcohol while taking this medication.`,
+    warning_signs_requiring_medical_attention: (matchedRule.serious_adverse_effects || []).slice(0, 3).join(', ') || "Difficulty breathing, swelling of face or throat, severe skin rash, or unusual bleeding.",
+    what_to_discuss_with_doctor: `Discuss your complete list of current prescription and over-the-counter medicines, any known drug allergies, and planned duration of therapy.`
+  };
+
+  // Base English Monograph
+  const monograph = {
     id: rawMed.id,
-    medicine_name: brandName,
-    brand_name: brandName,
-    generic_name: genericName,
-    brand_names: [brandName],
-    active_ingredients: activeIngredients.length > 0 ? activeIngredients : [genericName],
-    category: matchedRule.category || category,
-    therapeutic_category: matchedRule.category || category,
-    drug_classification: matchedRule.drug_class,
-    common_medical_uses: matchedRule.approved_indications.join("; "),
-    conditions_indicated: matchedRule.approved_indications,
-    clinical_indications: matchedRule.approved_indications,
-    approved_indications: matchedRule.approved_indications,
-    treats_nature: matchedRule.treats_nature,
-    mechanism_of_action: matchedRule.mechanism_of_action,
-    available_strengths: matchedRule.available_strengths || [rawMed.strength || "Standard Strength"],
-    available_dosage_forms: matchedRule.dosage_forms || [rawMed.formulation || "Tablet"],
-    dosage_forms: matchedRule.dosage_forms || [rawMed.formulation || "Tablet"],
-    route_of_administration: routeOfAdministration,
-    food_instructions: foodInstructions,
-    food_interactions: foodInstructions,
-    storage_instructions: storageInstructions,
-    common_side_effects: matchedRule.common_side_effects || ["Information unavailable in clinical reference; consult physician or pharmacist"],
-    serious_adverse_effects: matchedRule.serious_adverse_effects || ["Information unavailable in clinical reference; consult physician or pharmacist"],
-    important_warnings: matchedRule.serious_adverse_effects || ["Consult healthcare practitioner if adverse symptoms develop."],
-    contraindications: matchedRule.contraindications || ["Known hypersensitivity to active ingredients"],
-    drug_interactions: matchedRule.drug_interactions || ["Information unavailable in clinical reference; consult physician or pharmacist"],
-    general_approved_dosage: matchedRule.reference_dosage,
-    reference_dosage: matchedRule.reference_dosage,
-    administration_instructions: matchedRule.administration_instructions,
-    pregnancy_precautions: matchedRule.pregnancy_precautions,
-    breastfeeding_precautions: matchedRule.breastfeeding_precautions,
-    age_related_precautions: matchedRule.age_precautions,
-    prescription_classification: matchedRule.schedule || (rawMed.prescription_required ? "Schedule H Prescription Drug" : "General Healthcare Formulation"),
-    prescription_required: Boolean(rawMed.prescription_required),
-    price_inr: rawMed.price,
-    pack_size: rawMed.pack_size,
+    name: rawMed.name || brandName,
+    medicine_name: rawMed.name || brandName,
+    brand_name: rawMed.brand_name || brandName,
+    generic_name: rawMed.generic_name || genericName,
+    brand_names: Array.isArray(rawMed.brand_names) && rawMed.brand_names.length > 0 ? rawMed.brand_names : [brandName],
+    active_ingredients: rawMed.active_ingredients || (activeIngredients.length > 0 ? activeIngredients.join(', ') : genericName),
+    category: rawMed.category || matchedRule.category || category || "General Pharmaceutical Products",
+    therapeutic_category: rawMed.therapeutic_category || rawMed.category || matchedRule.category || category || "General Pharmaceutical Products",
+    therapeutic_classification: rawMed.therapeutic_classification || matchedRule.drug_class || "Allopathic Clinical Formulation",
+    drug_classification: rawMed.therapeutic_classification || matchedRule.drug_class || "Allopathic Clinical Formulation",
     manufacturer: rawMed.manufacturer || "Licensed Indian Pharmaceutical Manufacturer",
+    available_strengths: matchedRule.available_strengths || [rawMed.strength || "Standard Strength"],
+    dosage_forms: matchedRule.dosage_forms || [rawMed.formulation || "Tablet"],
+    available_dosage_forms: matchedRule.dosage_forms || [rawMed.formulation || "Tablet"],
+    route_of_administration: routeOfAdministration,
+    
+    // Clinical Info
+    what_medicine_is_used_for: matchedRule.approved_indications?.join("; ") || "Information currently unavailable in clinical reference",
+    common_medical_uses: matchedRule.approved_indications?.join("; ") || "Information currently unavailable in clinical reference",
+    approved_indications: matchedRule.approved_indications || ["Information currently unavailable in clinical reference"],
+    conditions_indicated: matchedRule.approved_indications || ["Information currently unavailable in clinical reference"],
+    clinical_indications: matchedRule.approved_indications || ["Information currently unavailable in clinical reference"],
+    indications: matchedRule.approved_indications || ["Information currently unavailable in clinical reference"],
+    treats_nature: matchedRule.treats_nature || "Underlying Clinical Condition",
+    how_the_medicine_works: matchedRule.mechanism_of_action || "Information currently unavailable in clinical reference",
+    mechanism_of_action: matchedRule.mechanism_of_action || "Information currently unavailable in clinical reference",
+    
+    common_adverse_effects: matchedRule.common_side_effects || ["Information currently unavailable in clinical reference"],
+    common_side_effects: matchedRule.common_side_effects || ["Information currently unavailable in clinical reference"],
+    known_adverse_effects: (matchedRule.common_side_effects || []).join(', ') || "Information currently unavailable in clinical reference",
+    serious_adverse_effects: matchedRule.serious_adverse_effects || ["Information currently unavailable in clinical reference"],
+    important_warnings: matchedRule.serious_adverse_effects || ["Information currently unavailable in clinical reference"],
+    contraindications: matchedRule.contraindications || ["Known hypersensitivity to active pharmaceutical ingredients"],
+    clinical_precautions: clinicalPrecautionsList,
+    precautions: clinicalPrecautions,
+    pregnancy_precautions: matchedRule.pregnancy_precautions || "Information currently unavailable in clinical reference",
+    breastfeeding_precautions: matchedRule.breastfeeding_precautions || "Information currently unavailable in clinical reference",
+    age_related_precautions: matchedRule.age_precautions || "Information currently unavailable in clinical reference",
+    
+    significant_drug_interactions: matchedRule.drug_interactions || ["Information currently unavailable in clinical reference"],
+    drug_interactions: matchedRule.drug_interactions || ["Information currently unavailable in clinical reference"],
+    food_interactions: foodInstructions,
+    food_instructions: foodInstructions,
+    storage_instructions: storageInstructions,
+    storage: storageInstructions,
+    
+    regulatory_schedule: regulatorySchedule,
+    schedule: regulatorySchedule,
+    prescription_classification: regulatorySchedule,
+    prescription_required: Boolean(rawMed.prescription_required),
+    
+    general_approved_dosage: matchedRule.reference_dosage || "Information currently unavailable in clinical reference",
+    reference_dosage: matchedRule.reference_dosage || "Information currently unavailable in clinical reference",
+    administration_instructions: matchedRule.administration_instructions || "Follow physician instructions",
+    
+    price_inr: rawMed.price,
+    pack_size: rawMed.pack_size || "Standard Packaging",
     generic_vs_brand_explanation: genericVsBrand,
+    patient_explanation: patientExplanation,
     safety_information: safetyInformation,
+    source: matchedRule.source || "Central Drugs Standard Control Organisation (CDSCO) / Indian Pharmacopoeia / WHO EML",
     medical_source: matchedRule.source || "CDSCO / Indian Pharmacopoeia / WHO EML",
     last_verification_date: "2026-Q1",
     disclaimer: MEDICAL_DISCLAIMER
+  };
+
+  // If a non-English language is requested, translate explanatory strings while preserving exact medicine names, numbers, and active ingredients
+  if (targetLanguage && targetLanguage !== 'en') {
+    return translateMedicineMonograph(monograph, targetLanguage);
+  }
+
+  return monograph;
+}
+
+/**
+ * Multilingual Translation Engine for Medicine Monographs
+ * Supports: ta (Tamil), hi (Hindi), te (Telugu), ml (Malayalam), kn (Kannada), bn (Bengali), mr (Marathi)
+ * Preserves medicine names, active ingredients, numerical values, and reference ranges verbatim.
+ */
+export function translateMedicineMonograph(monograph, lang) {
+  if (!lang || lang === 'en') {
+    return monograph;
+  }
+
+  const brand = monograph.brand_name || monograph.name || 'Medicine';
+  const generic = monograph.generic_name || brand;
+  const category = monograph.category || 'Pharmaceuticals';
+
+  const I18N = {
+    ta: {
+      genericVsBrand: `பொதுப் பெயர் (${generic}) என்பது சுகாதார அமைப்புகளால் (WHO / CDSCO) அங்கீகரிக்கப்பட்ட வேதியியல் மூலக்கூறு ஆகும். வர்த்தகப் பெயர் (${brand}) என்பது தயாரிப்பாளர் வழங்கும் பிராண்ட் பெயர் ஆகும். இரண்டுமே ஒரே செயலில் உள்ள மூலப்பொருளை (API) கொண்டுள்ளன மற்றும் சமமான செயல்திறன் கொண்டவை.`,
+      safetyInfo: `சட்டபூர்வ மருத்துவ பாதுகாப்பு அறிவிப்பு: இந்த மருந்து சரிபார்க்கப்பட்ட தயாரிப்பு ஆகும். மருத்துவர் பரிந்துரைத்த அளவை கண்டிப்பாக பின்பற்றவும். தானாக உட்கொள்வதையோ அல்லது திடீரென நிறுத்துவதையோ தவிர்க்கவும். மூச்சுத் திணறல் அல்லது ஒவ்வாமை ஏற்பட்டால் உடனடியாக மருத்துவரை அணுகவும்.`,
+      whatItDoes: `இது ${category} பிரிவைச் சேர்ந்த மருந்தாகும். மருத்துவரால் கண்டறியப்பட்ட நோயைக் குணப்படுத்த அல்லது கட்டுப்படுத்த உதவுகிறது.`,
+      whyPrescribed: `மருத்துவ ரீதியாக அனுமதிக்கப்பட்ட பயன்பாடுகளுக்காக பரிந்துரைக்கப்படுகிறது.`,
+      howItWorks: `உடலில் உள்ள நோய்க் காரணிகளை எதிர்த்து அல்லது உடல் செயல்பாடுகளை சமநிலைப்படுத்தி செயல்படுகிறது.`,
+      precautions: `மருத்துவரின் அறிவுறுத்தலின்படி உட்கொள்ளவும். கல்லீரல், சிறுநீரகம் அல்லது இதய பிரச்சினைகள் இருந்தால் மருத்துவரிடம் முன்கூட்டியே தெரிவிக்கவும்.`,
+      warningSigns: `மூச்சுத் திணறல், முகம் அல்லது தொண்டை வீக்கம், கடுமையான தோல் தடிப்பு அல்லது அசாதாரண ரத்தப்போக்கு.`,
+      discussDoctor: `நீங்கள் உட்கொள்ளும் அனைத்து பிற மருந்துகள் மற்றும் ஒவ்வாமைகள் குறித்து உங்கள் மருத்துவரிடம் விவாதிக்கவும்.`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `காலை உணவுக்கு 30-60 நிமிடங்களுக்கு முன் வெறும் வயிற்றில் தண்ணீருடன் உட்கொள்ளவும்.` : `வயிற்று உபாதையைத் தவிர்க்க உணவுக்குப் பின் போதுமான தண்ணீருடன் உட்கொள்ளவும்.`,
+      storage: `25°C-க்கு குறைவான வெப்பநிலையில், நேரடி சூரிய ஒளி மற்றும் ஈரப்பதம் படாதவாறு குளிர்ந்த, உலர்ந்த இடத்தில் வைக்கவும். குழந்தைகளுக்கு எட்டாதவாறு வைக்கவும்.`
+    },
+    hi: {
+      genericVsBrand: `जेनेरिक नाम (${generic}) स्वास्थ्य प्राधिकरणों (WHO / CDSCO) द्वारा अनुमोदित मूल रासायनिक अणु है जो चिकित्सीय प्रभाव उत्पन्न करता है। ब्रांड नाम (${brand}) वह ट्रेडमार्क है जिसके तहत दवा बेची जाती है। दोनों में समान सक्रिय तत्व (API) होता है और दोनों समान रूप से प्रभावी हैं।`,
+      safetyInfo: `वैधानिक चिकित्सकीय सुरक्षा सूचना: यह दवा एक प्रमाणित औषधीय उत्पाद है। डॉक्टर द्वारा निर्धारित खुराक का कड़ाई से पालन करें। बिना सलाह दवा न बदलें। सांस लेने में कठिनाई या चेहरे पर सूजन होने पर तुरंत आपातकालीन चिकित्सा सहायता लें।`,
+      whatItDoes: `यह ${category} वर्ग की दवा है जो रोग के प्रबंधन एवं उपचार के लिए दी जाती है।`,
+      whyPrescribed: `डॉक्टर द्वारा बीमारी के लक्षणों को नियंत्रित करने एवं स्वास्थ्य सुधार के लिए निर्धारित की जाती है।`,
+      howItWorks: `यह शरीर में रोग उत्पन्न करने वाले कारकों को नियंत्रित कर और शारीरिक प्रक्रियाओं को संतुलित कर काम करती है।`,
+      precautions: `दवा को हमेशा डॉक्टर के परामर्श अनुसार लें। किडनी, लिवर या हृदय संबंधी किसी भी समस्या की जानकारी पहले से डॉक्टर को दें।`,
+      warningSigns: `सांस लेने में तकलीफ, चेहरे/गले पर सूजन, गंभीर त्वचा पर चकत्ते या असामान्य रक्तस्राव।`,
+      discussDoctor: `अपनी वर्तमान दवाओं और किसी भी एलर्जी के बारे में अपने डॉक्टर या फार्मासिस्ट से चर्चा करें।`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `नाश्ते से 30 से 60 मिनट पहले खाली पेट पानी के साथ लें।` : `पेट की परेशानी से बचने के लिए भोजन के तुरंत बाद पर्याप्त पानी के साथ लें।`,
+      storage: `25°C से कम तापमान पर, सीधी धूप और नमी से सुरक्षित ठंडी और सूखी जगह पर रखें। बच्चों की पहुंच से दूर रखें।`
+    },
+    te: {
+      genericVsBrand: `జెనరిక్ పేరు (${generic}) అనేది ఆరోగ్య సంస్థలు (WHO / CDSCO) ఆమోదించిన రసాయన అణువు. బ్రాండ్ పేరు (${brand}) అనేది కంపెనీ మార్కెటింగ్ చేసే పేరు. రెండింటిలోనూ ఒకే క్రియాశీల పదార్థం (API) ఉంటుంది మరియు ఒకే విధమైన సామర్థ్యాన్ని కలిగి ఉంటాయి.`,
+      safetyInfo: `వైద్య భద్రతా నోటీసు: డాక్టర్ సూచించిన మోతాదును ఖచ్చితంగా పాటించండి. స్వంతంగా మందులు వాడటం లేదా ఆపడం చేయవద్దు. శ్వాస తీసుకోవడంలో ఇబ్బంది లేదా వాపు కనిపిస్తే వెంటనే వైద్యుడిని సంప్రదించండి.`,
+      whatItDoes: `ఇది ${category} రకానికి చెందిన ఔషధం. అనారోగ్యాన్ని నియంత్రించడానికి ఉపయోగపడుతుంది.`,
+      whyPrescribed: `వైద్య నిపుణుల ద్వారా గుర్తించబడిన సమస్యల నివారణకు సిఫార్సు చేయబడింది.`,
+      howItWorks: `శరీరంలోని లక్ష్య కణాలపై పనిచేసి రోగ లక్షణాలను అదుపు చేస్తుంది.`,
+      precautions: `కిడ్నీ, లివర్ లేదా గుండె సమస్యలు ఉన్నట్లయితే ముందే డాక్టర్‌కు తెలియజేయండి.`,
+      warningSigns: `శ్వాస ఆడకపోవడం, ముఖం లేదా గొంతు వాపు, తీవ్రమైన చర్మ దద్దుర్లు.`,
+      discussDoctor: `మీరు వాడుతున్న ఇతర మందుల వివరాలను డాక్టర్‌తో చర్చించండి.`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `అల్పాహారానికి 30-60 నిమిషాల ముందు ఖాళీ కడుపుతో తీసుకోండి.` : `కడుపులో మంటను నివారించడానికి భోజనం తర్వాత నీటితో తీసుకోండి.`,
+      storage: `25°C కంటే తక్కువ ఉష్ణోగ్రత వద్ద, ప్రత్యక్ష సూర్యకాంతి మరియు తేమ లేని చల్లని ప్రదేశంలో నిల్వ చేయండి.`
+    },
+    ml: {
+      genericVsBrand: `ജനറിക് നാമം (${generic}) എന്നത് ആരോഗ്യ അധികാരികൾ (WHO / CDSCO) അംഗീകരിച്ച രാസ തന്മാത്രയാണ്. ബ്രാൻഡ് നാമം (${brand}) എന്നത് നിർമ്മാതാവിന്റെ വ്യാപാര നാമമാണ്. ഇവ രണ്ടും ഒരേ ചേരുവയും ഗുണനിലവാരവും ഉള്ളവയാണ്.`,
+      safetyInfo: `നിയമാനുസൃത സുരക്ഷാ മുന്നറിയിപ്പ്: ഡോക്ടറുടെ നിർദ്ദേശപ്രകാരം മാത്രം മരുന്ന് കഴിക്കുക. സ്വന്തം നിലയ്ക്ക് മരുന്ന് മാറ്റുകയോ നിർത്തുകയോ ചെയ്യരുത്. ശ്വാസതടസ്സമോ അലർജിയോ ഉണ്ടായാൽ ഉടൻ അടിയന്തര ചികിത്സ തേടുക.`,
+      whatItDoes: `ഇത് ${category} വിഭാഗത്തിൽപ്പെടുന്ന ഔഷധമാണ്. രോഗം സുഖപ്പെടുത്താനും നിയന്ത്രിക്കാനും സഹായിക്കുന്നു.`,
+      whyPrescribed: `ഡോക്ടർ നിർദ്ദേശിച്ച രോഗാവസ്ഥകൾക്ക് ഫലപ്രദമായി ഉപയോഗിക്കുന്നു.`,
+      howItWorks: `ശരീരത്തിലെ രോഗകാരണങ്ങളെ പ്രതിരോധിച്ച് ശരീര പ്രവർത്തനങ്ങൾ സാധാരണ നിലയിലാക്കുന്നു.`,
+      precautions: `കരൾ, വൃക്ക, ഹൃദയ രോഗങ്ങൾ ഉള്ളവർ ഡോക്ടറോട് മുൻകൂട്ടി പറയുക.`,
+      warningSigns: `ശ്വാസമെടുക്കാൻ ബുദ്ധിമുട്ട്, മുഖത്തോ തൊണ്ടയിലോ വീക്കം, കഠിനമായ ത്വക്ക് രോഗങ്ങൾ.`,
+      discussDoctor: `നിങ്ങൾ കഴിക്കുന്ന മറ്റ് മരുന്നുകളെയും അലർജികളെയും കുറിച്ച് ഡോക്ടറോട് സംസാരിക്കുക.`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `ഭക്ഷണത്തിന് 30-60 മിനിറ്റ് മുമ്പ് വെറുംവയറ്റിൽ വെള്ളത്തോടൊപ്പം കഴിക്കുക.` : `ഭക്ഷണത്തിന് ശേഷം ആവശ്യത്തിന് വെള്ളത്തോടൊപ്പം കഴിക്കുക.`,
+      storage: `25 ഡിഗ്രി സെൽഷ്യസിൽ താഴെയുള്ള തണുപ്പുള്ളതും ഉണങ്ങിയതുമായ സ്ഥലത്ത് സൂക്ഷിക്കുക.`
+    },
+    kn: {
+      genericVsBrand: `ಜೆನೆರಿಕ್ ಹೆಸರು (${generic}) ಎಂಬುದು ಆರೋಗ್ಯ ಪ್ರಾಧಿಕಾರಗಳು ಅನುಮೋದಿಸಿದ ಅಧಿಕೃತ ರಾಸಾಯನಿಕ ಸೂತ್ರವಾಗಿದೆ. ಬ್ರ್ಯಾಂಡ್ ಹೆಸರು (${brand}) ಎಂದರೆ ಕಂಪನಿಯು ನೀಡುವ ವ್ಯಾಪಾರ ಹೆಸರು. ಎರಡರಲ್ಲೂ ಒಂದೇ ಸಕ್ರಿಯ ಅಂಶವಿರುತ್ತದೆ (API).`,
+      safetyInfo: `ಕಾನೂನುಬದ್ಧ ವೈದ್ಯಕೀಯ ಸುರಕ್ಷತಾ ಸೂಚನೆ: ವೈದ್ಯರ ಸೂಚನೆಗಳನ್ನು ಕಟ್ಟುನಿಟ್ಟಾಗಿ ಪಾಲಿಸಿ. ಸ್ವಯಂ ಔಷಧಿ ಸೇವಿಸಬೇಡಿ ಅಥವಾ ತಕ್ಷಣ ನಿಲ್ಲಿಸಬೇಡಿ. ಉಸಿರಾಟದ ತೊಂದರೆ ಅಥವಾ ಅಲರ್ಜಿ ಕಂಡುಬಂದರೆ ತಕ್ಷಣ ವೈದ್ಯರನ್ನು ಭೇಟಿ ಮಾಡಿ.`,
+      whatItDoes: `ಇದು ${category} ವಿಭಾಗದ ಔಷಧವಾಗಿದ್ದು, ರೋಗ ನಿಯಂತ್ರಣಕ್ಕೆ ಸಹಾಯಕವಾಗಿದೆ.`,
+      whyPrescribed: `ವೈದ್ಯರ ಸಲಹೆಯಂತೆ ನಿರ್ದಿಷ್ಟ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಗಳ ನಿವಾರಣೆಗೆ ಸೂಚಿಸಲಾಗಿದೆ.`,
+      howItWorks: `ದೇಹದ ಅಂಗಾಂಶಗಳಲ್ಲಿ ಸೂಕ್ತ ರೀತಿಯಲ್ಲಿ ಕಾರ್ಯನಿರ್ವಹಿಸಿ ರೋಗವನ್ನು ಗುಣಪಡಿಸುತ್ತದೆ.`,
+      precautions: `ಕಿಡ್ನಿ, ಲಿವರ್ ಅಥವಾ ಹೃದಯ ಸಂಬಂಧಿ ಕಾಯಿಲೆಗಳಿದ್ದರೆ ವೈದ್ಯರಿಗೆ ಮುಂಚಿತವಾಗಿ ತಿಳಿಸಿ.`,
+      warningSigns: `ಉಸಿರಾಟದ ತೊಂದರೆ, ಮುಖ ಅಥವಾ ಗಂಟಲಿನ ಊತ, ತೀವ್ರ ಚರ್ಮದ ತುರಿಕೆ.`,
+      discussDoctor: `ನೀವು ತೆಗೆದುಕೊಳ್ಳುತ್ತಿರುವ ಇತರೆ ಔಷಧಿಗಳ ಬಗ್ಗೆ ವೈದ್ಯರೊಂದಿಗೆ ಸಮಾಲೋಚಿಸಿ.`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `ಉಪಾಹಾರಕ್ಕೆ 30-60 ನಿಮಿಷಗಳ ಮೊದಲು ಖಾಲಿ ಹೊಟ್ಟೆಯಲ್ಲಿ ಸೇವಿಸಿ.` : `ಊಟದ ನಂತರ ಸಾಕಷ್ಟು ನೀರಿನೊಂದಿಗೆ ಸೇವಿಸಿ.`,
+      storage: `25°C ಗಿಂತ ಕಡಿಮೆ ತಾಪಮಾನದಲ್ಲಿ ತಂಪಾದ, ಒಣ ಸ್ಥಳದಲ್ಲಿ ಇರಿಸಿ. ಮಕ್ಕಳಿಂದ ದೂರವಿಡಿ.`
+    },
+    bn: {
+      genericVsBrand: `জেনেরিক নাম (${generic}) হলো স্বাস্থ্য কর্তৃপক্ষ (WHO / CDSCO) দ্বারা অনুমোদিত সক্রিয় রাসায়নিক উপাদান। ব্র্যান্ড নাম (${brand}) হলো প্রস্তুতকারকের ট্রেডমার্ক। উভয় ওষুধেই সমমানের সক্রিয় উপাদান থাকে এবং তাদের কার্যকারিতা সমান।`,
+      safetyInfo: `সংবিধিবদ্ধ চিকিৎসা নিরাপত্তা বিজ্ঞপ্তি: ডাক্তারের পরামর্শ অনুযায়ী সঠিক মাত্রায় ওষুধ সেবন করুন। নিজে থেকে ওষুধ খাওয়া বন্ধ করবেন না। শ্বাসকষ্ট বা অ্যালার্জির লক্ষণ দেখা দিলে দ্রুত ডাক্তারের শরণাপন্ন হন।`,
+      whatItDoes: `এটি ${category} বিভাগের একটি অনুমোদিত ওষুধ যা রোগ নিরাময় ও নিয়ন্ত্রণে ব্যবহৃত হয়।`,
+      whyPrescribed: `চিকিৎসক কর্তৃক নির্দিষ্ট শারীরিক অসুস্থতার চিকিৎসায় নির্ধারিত।`,
+      howItWorks: `দেহের রোগ প্রতিরোধ প্রক্রিয়াকে শক্তিশালী করে এবং ক্ষতিকারক কারণগুলোকে দূর করে কাজ করে।`,
+      precautions: `লিভার, কিডনি বা হৃদরোগের পূর্ব ইতিহাস থাকলে ডাক্তারকে আগেই জানান।`,
+      warningSigns: `শ্বাস নিতে কষ্ট, মুখ বা গলা ফুলে যাওয়া, ত্বকে মারাত্মক ফুসকুড়ি।`,
+      discussDoctor: `আপনার বর্তমান সব ধরনের ওষুধ এবং অ্যালার্জির বিষয়ে ডাক্তারের সাথে কথা বলুন।`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `সকালের খাবারের ৩০-৬০ মিনিট আগে খালি পেটে পানির সাথে খান।` : `পেটের অস্বস্তি এড়াতে খাবারের পরে পর্যাপ্ত পানির সাথে খান।`,
+      storage: `২৫ ডিগ্রি সেলসিয়াসের নিচে সরাসরি সূর্যালোক ও আর্দ্রতামুক্ত স্থানে রাখুন। শিশুদের নাগালের বাইরে রাখুন।`
+    },
+    mr: {
+      genericVsBrand: `जेनेरिक नाव (${generic}) हे आरोग्य संस्थांनी (WHO / CDSCO) प्रमाणित केलेले मूळ रासायनिक घटक आहे. ब्रँड नाव (${brand}) हे उत्पादकाचे व्यावसायिक नाव आहे. दोन्हीमध्ये समान घटक (API) असून त्यांची गुणवत्ता व परिणामकारकता एकसारखीच असते.`,
+      safetyInfo: `वैधानिक वैद्यकीय सुरक्षा सूचना: डॉक्टरांच्या सल्ल्यानुसारच योग्य डोस घ्या. स्वतःहून औषध घेणे किंवा थांबवणे टाळा. श्वास घेण्यास त्रास किंवा चेहऱ्यावर सूज आल्यास त्वरित वैद्यकीय मदत घ्या.`,
+      whatItDoes: `हे ${category} गटातील औषध असून आजारावर नियंत्रण व उपचारासाठी वापरले जाते.`,
+      whyPrescribed: `डॉक्टरांनी निदान केलेल्या वैद्यकीय स्थितीच्या उपचारासाठी लिहून दिले जाते.`,
+      howItWorks: `शरीरातील लक्षित घटकांवर कार्य करून शारीरिक संतुलन पूर्ववत करते.`,
+      precautions: `मूत्रपिंड, यकृत किंवा हृदयाचे विकार असल्यास डॉक्टरांना पूर्वकल्पना द्या.`,
+      warningSigns: `श्वास घेण्यास अडचण, चेहरा किंवा घशावर सूज, त्वचेवर तीव्र पुरळ.`,
+      discussDoctor: `सध्या चालू असलेल्या इतर सर्व औषधांची माहिती डॉक्टरांना द्या.`,
+      foodPrompt: monograph.food_instructions?.includes('empty') ? `नाश्त्याच्या ३०-६० मिनिटे आधी रिकाम्या पोटी पाण्यासोबत घ्या.` : `पोटाचा त्रास टाळण्यासाठी जेवणानंतर भरपूर पाण्यासोबत घ्या.`,
+      storage: `२५°C पेक्षा कमी तापमानावर थेट सूर्यप्रकाश आणि आर्द्रतेपासून दूर थंड ठिकाणी ठेवा.`
+    }
+  };
+
+  const t = I18N[lang] || I18N.ta;
+
+  return {
+    ...monograph,
+    selected_language: lang,
+    generic_vs_brand_explanation: t.genericVsBrand,
+    safety_information: t.safetyInfo,
+    food_instructions: t.foodPrompt,
+    food_interactions: t.foodPrompt,
+    storage_instructions: t.storage,
+    storage: t.storage,
+    patient_explanation: {
+      what_it_does: t.whatItDoes,
+      why_prescribed: t.whyPrescribed,
+      how_it_works_in_body: t.howItWorks,
+      common_side_effects: monograph.patient_explanation.common_side_effects,
+      important_precautions: t.precautions,
+      warning_signs_requiring_medical_attention: t.warningSigns,
+      what_to_discuss_with_doctor: t.discussDoctor
+    }
   };
 }

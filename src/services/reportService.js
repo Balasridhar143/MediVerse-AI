@@ -15,17 +15,29 @@ const normalizeDbReport = (r) => {
   if (!r) return null;
 
   const rawParams = r.parameters || [];
-  const normalizedParams = Array.isArray(rawParams) ? rawParams.map((p) => ({
-    name: p.test_name || p.name || 'Laboratory Marker',
-    value: p.patient_value !== undefined ? p.patient_value : p.value,
-    unit: p.unit || '',
-    referenceRange: p.reference_range || p.referenceRange || 'Standard reference bounds',
-    flag: p.status || p.flag || 'Normal',
-    is_critical: Boolean(p.is_critical),
-    meaning: p.meaning || p.easyMeaning || '',
-    possible_reasons: p.possible_reasons || p.whatItMeans || '',
-    explanation: p.explanation || ''
-  })) : [];
+  const normalizedParams = Array.isArray(rawParams) ? rawParams.map((p) => {
+    const rawFlag = String(p.status || p.flag || '').toLowerCase();
+    const indicator = p.indicator || (rawFlag.includes('low') || rawFlag.includes('below') ? 'below' : rawFlag.includes('high') || rawFlag.includes('above') ? 'above' : 'within');
+    const statusText = p.status || p.flag || (indicator === 'within' ? 'Within Range' : indicator === 'above' ? 'Above Range' : 'Below Range');
+
+    return {
+      id: p.id || p.test_name || p.name,
+      name: p.test_name || p.name || 'Laboratory Marker',
+      testName: p.test_name || p.name || 'Laboratory Marker',
+      value: p.patient_value !== undefined ? p.patient_value : p.value,
+      unit: p.unit || '',
+      referenceRange: p.reference_range || p.referenceRange || 'Standard reference bounds',
+      indicator: indicator,
+      status: statusText,
+      flag: statusText,
+      is_critical: Boolean(p.is_critical),
+      meaning: p.meaning || p.easyMeaning || '',
+      easyMeaning: p.easyMeaning || p.meaning || '',
+      purpose: p.purpose || p.meaning || '',
+      possible_reasons: p.possible_reasons || p.whatItMeans || '',
+      explanation: p.explanation || ''
+    };
+  }) : [];
 
   const rawStructured = r.structured_data || {};
   const rawAi = r.ai_explanation || {};
@@ -115,16 +127,17 @@ export const reportService = {
 
   /**
    * POST /api/reports/analyze
-   * Full clinical RAG analysis pipeline
+   * Full clinical RAG analysis pipeline with optional Indian language selection
    */
-  async analyzeReport({ file, fileData, fileName, fileType, patientName, reportName, reportType, hospital, doctor, rawText }) {
+  async analyzeReport({ file, fileData, fileName, fileType, patientName, reportName, reportType, hospital, doctor, rawText, language = 'en' }) {
     let payload = {
       patient_name: patientName,
       report_name: reportName,
       report_type: reportType || 'Blood Tests',
       hospital: hospital || 'Diagnostic Laboratory',
       doctor: doctor || 'Attending Physician',
-      raw_text: rawText || ''
+      raw_text: rawText || '',
+      language: language || 'en'
     };
 
     if (file) {
@@ -153,6 +166,36 @@ export const reportService = {
       report: normalizeDbReport(res.data.report),
       ragAnalysis: res.data.rag_analysis
     };
+  },
+
+  /**
+   * POST /api/reports/:id/reanalyze
+   * Translates or re-runs analysis on an existing uploaded report in the selected language
+   */
+  async reanalyzeReport(id, language = 'en') {
+    const res = await api.post(`/reports/${id}/reanalyze`, { language });
+    return res.data;
+  },
+
+  /**
+   * Downloads or opens original report file
+   */
+  async downloadReportFile(id, filename = 'medical_report.pdf') {
+    try {
+      const res = await api.get(`/reports/${id}/download`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.warn('Direct file download fallback:', err);
+      window.open(`/api/reports/${id}/download`, '_blank');
+    }
   },
 
   /**

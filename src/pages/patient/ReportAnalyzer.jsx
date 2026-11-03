@@ -25,11 +25,16 @@ import {
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import UniversalLanguageSelector from '../../components/LanguageSelector';
 import { reportService } from '../../services/reportService';
 import { useAuth } from '../../context/AuthContext';
 
 export default function ReportAnalyzer() {
   const { user } = useAuth();
+
+  const [selectedLanguage, setSelectedLanguage] = useState(() => {
+    return localStorage.getItem('mediverse_patient_language') || 'en';
+  });
 
   const [file, setFile] = useState(null);
   const [patientName, setPatientName] = useState(user?.full_name || user?.name || '');
@@ -43,11 +48,30 @@ export default function ReportAnalyzer() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [currentReportId, setCurrentReportId] = useState(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
 
   const fileInputRef = useRef(null);
+
+  const handleLanguageChange = async (lang) => {
+    setSelectedLanguage(lang);
+    localStorage.setItem('mediverse_patient_language', lang);
+    if (currentReportId) {
+      try {
+        setIsAnalyzing(true);
+        const res = await reportService.reanalyzeReport(currentReportId, lang);
+        if (res.rag_analysis) {
+          setAnalysisResult(res.rag_analysis);
+        }
+      } catch (e) {
+        console.warn('Re-analysis translation warning:', e);
+      } finally {
+        setIsAnalyzing(false);
+      }
+    }
+  };
 
   const analysisSteps = [
     'Parsing file and validating document headers...',
@@ -121,11 +145,13 @@ export default function ReportAnalyzer() {
         reportName: reportName || file.name.replace(/\.[^/.]+$/, ''),
         reportType,
         hospital,
-        doctor
+        doctor,
+        language: selectedLanguage
       });
 
       clearInterval(stepInterval);
       setAnalysisResult(response.ragAnalysis || response.report);
+      setCurrentReportId(response.reportId || response.report?.id);
       setSavedSuccess(true);
     } catch (err) {
       clearInterval(stepInterval);
@@ -152,7 +178,11 @@ export default function ReportAnalyzer() {
         title="AI Medical Report Analyzer"
         subtitle="Automated laboratory parameter extraction, physiological reference interval comparison, and clinical guideline citations."
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <UniversalLanguageSelector
+              language={selectedLanguage}
+              onChangeLanguage={handleLanguageChange}
+            />
             <Link to="/patient/reports">
               <Button variant="outline" size="sm" icon={FileCheck2}>
                 My Health Records
@@ -371,7 +401,11 @@ export default function ReportAnalyzer() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+            <UniversalLanguageSelector
+              language={selectedLanguage}
+              onChangeLanguage={handleLanguageChange}
+            />
               <Button variant="outline" size="sm" icon={RefreshCw} onClick={resetForm} className="text-xs">
                 Analyze Another
               </Button>

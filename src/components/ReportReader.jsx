@@ -21,6 +21,7 @@ import {
   Download,
   ExternalLink,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 import Button from './Button';
 import ReportOverview from './ReportOverview';
@@ -59,6 +60,12 @@ export default function ReportReader({
   const [isUnderstandWalkthroughOpen, setIsUnderstandWalkthroughOpen] = useState(false);
   const [selectedParamForDetail, setSelectedParamForDetail] = useState(null);
   const [language, setLanguage] = useState(initialLanguage);
+  const [currentReport, setCurrentReport] = useState(report);
+  const [reanalyzing, setReanalyzing] = useState(false);
+
+  React.useEffect(() => {
+    setCurrentReport(report);
+  }, [report]);
 
   React.useEffect(() => {
     if (initialLanguage) {
@@ -68,18 +75,40 @@ export default function ReportReader({
 
   if (!isOpen || !report) return null;
 
+  const activeReport = currentReport || report;
   const currentLangConfig = getLanguageConfig(language);
   const isEnglish = language === 'en';
 
+  const handleLanguageChange = async (newLang) => {
+    setLanguage(newLang);
+    try {
+      localStorage.setItem('mediverse_patient_language', newLang);
+    } catch (e) {}
+
+    if (activeReport?.id) {
+      setReanalyzing(true);
+      try {
+        const updated = await reportService.reanalyzeReport(activeReport.id, newLang);
+        if (updated) {
+          setCurrentReport(updated);
+        }
+      } catch (err) {
+        console.warn('Re-analysis in new language failed:', err);
+      } finally {
+        setReanalyzing(false);
+      }
+    }
+  };
+
   // Results categorizations
-  const withinRangeParams = report.parameters?.filter((p) => p.indicator === 'within') || [];
-  const outsideRangeParams = report.parameters?.filter((p) => p.indicator !== 'within') || [];
+  const withinRangeParams = activeReport.parameters?.filter((p) => p.indicator === 'within') || [];
+  const outsideRangeParams = activeReport.parameters?.filter((p) => p.indicator !== 'within') || [];
 
   // Speech summary text
-  const repTrans = getReportTranslation(report.id, language);
+  const repTrans = getReportTranslation(activeReport.id, language);
   const speechText = repTrans?.simpleExplanation
-    ? `${report.reportName}. ${repTrans.whatIsThisReport} ${repTrans.simpleExplanation} ${repTrans.whatThisMeans}`
-    : `${report.reportName}. Conducted at ${report.hospital} on ${report.date}. ${report.whatIsThisReport} Important finding: ${report.importantFindings}. Discuss results with your doctor.`;
+    ? `${activeReport.reportName}. ${repTrans.whatIsThisReport} ${repTrans.simpleExplanation} ${repTrans.whatThisMeans}`
+    : `${activeReport.reportName}. Conducted at ${activeReport.hospital} on ${activeReport.date}. ${activeReport.aiExplanation?.simpleExplanation || activeReport.whatIsThisReport || ''}. Important finding: ${activeReport.aiExplanation?.whatThisMeans || activeReport.importantFindings || ''}. Discuss results with your doctor.`;
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
@@ -92,23 +121,23 @@ export default function ReportReader({
             <div>
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200 uppercase tracking-wider">
-                  {report.reportType}
+                  {activeReport.reportType}
                 </span>
                 <span className="text-slate-300">·</span>
                 <span className="text-xs text-slate-500 font-medium">
-                  Patient: <strong className="text-slate-800">{report.patientName || 'Patient Record'}</strong>
+                  Patient: <strong className="text-slate-800">{activeReport.patientName || 'Patient Record'}</strong>
                 </span>
               </div>
               <h1 className="text-lg sm:text-xl font-extrabold text-slate-900">
-                {report.reportName}
+                {activeReport.reportName}
               </h1>
             </div>
 
             <div className="flex items-center gap-2 self-start sm:self-center">
-              {(report.fileData || report.id) && (
+              {(activeReport.fileData || activeReport.id) && (
                 <button
                   type="button"
-                  onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+                  onClick={() => reportService.downloadReportFile(activeReport.id, activeReport.fileName)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-xs font-bold transition-all cursor-pointer shadow-2xs"
                   title="Download or open original uploaded document"
                 >
@@ -130,21 +159,21 @@ export default function ReportReader({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 mt-3 border-t border-slate-200/70 text-xs">
             <div>
               <span className="text-[11px] text-slate-400 block font-medium">Date:</span>
-              <strong className="text-slate-800 font-bold">{report.date}</strong>
+              <strong className="text-slate-800 font-bold">{activeReport.date}</strong>
             </div>
             <div>
               <span className="text-[11px] text-slate-400 block font-medium">Lab / Diagnostic Center:</span>
-              <strong className="text-slate-800 font-semibold truncate block" title={report.hospital}>
-                {report.hospital}
+              <strong className="text-slate-800 font-semibold truncate block" title={activeReport.hospital}>
+                {activeReport.hospital}
               </strong>
             </div>
             <div>
               <span className="text-[11px] text-slate-400 block font-medium">Attending Doctor:</span>
-              <strong className="text-slate-800 font-semibold">{report.doctor || 'Dr. Arun Kumar'}</strong>
+              <strong className="text-slate-800 font-semibold">{activeReport.doctor || 'Dr. Arun Kumar'}</strong>
             </div>
             <div>
               <span className="text-[11px] text-slate-400 block font-medium">Status:</span>
-              <span className="font-bold text-teal-700">{report.status}</span>
+              <span className="font-bold text-teal-700">{activeReport.status}</span>
             </div>
           </div>
         </div>
@@ -211,7 +240,7 @@ export default function ReportReader({
 
             <UniversalLanguageSelector
               language={language}
-              onChangeLanguage={setLanguage}
+              onChangeLanguage={handleLanguageChange}
             />
 
             <VoiceExplanation
@@ -238,18 +267,18 @@ export default function ReportReader({
         {/* ==================================================== */}
         <div className="p-5 overflow-y-auto space-y-6 text-xs">
           {/* Document File / Image Preview & Download Banner */}
-          {report.fileData && (
+          {activeReport.fileData && (
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <FileText className="w-4 h-4 text-teal-600 shrink-0" />
                   <span className="font-bold text-slate-800">
-                    Original Document: <span className="text-teal-800">{report.fileName || 'Diagnostic Report'}</span>
+                    Original Document: <span className="text-teal-800">{activeReport.fileName || 'Diagnostic Report'}</span>
                   </span>
                 </div>
                 <button
                   type="button"
-                  onClick={() => reportService.downloadReportFile(report.id, report.fileName)}
+                  onClick={() => reportService.downloadReportFile(activeReport.id, activeReport.fileName)}
                   className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -258,9 +287,9 @@ export default function ReportReader({
               </div>
 
               {/* If image data is present, show preview */}
-              {(report.fileData.startsWith('data:image') || report.fileType?.includes('image')) && (
+              {(activeReport.fileData.startsWith('data:image') || activeReport.fileType?.includes('image')) && (
                 <div className="mt-2 p-2 bg-white rounded-lg border border-slate-200 flex justify-center max-h-64 overflow-auto">
-                  <img src={report.fileData} alt={report.reportName} className="max-h-56 object-contain rounded" />
+                  <img src={activeReport.fileData} alt={activeReport.reportName} className="max-h-56 object-contain rounded" />
                 </div>
               )}
             </div>
@@ -286,7 +315,118 @@ export default function ReportReader({
           )}
 
           {/* 2. REPORT OVERVIEW + REPORT UNDERSTANDING COMPLETENESS */}
-          <ReportOverview report={report} language={language} />
+          <ReportOverview report={activeReport} language={language} />
+
+          {/* AI Clinical Analysis & Multilingual Summary */}
+          {activeReport.aiExplanation && (
+            <div className="p-4 bg-linear-to-r from-teal-50/70 to-emerald-50/50 border border-teal-200 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-teal-700 text-white rounded-lg shadow-2xs">
+                    <Sparkles className="w-3.5 h-3.5" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                      AI Clinical Analysis & Patient Summary
+                    </h4>
+                    <p className="text-[10px] text-teal-800 font-medium">
+                      Evidence-grounded clinical analysis in {currentLangConfig.nativeName} ({currentLangConfig.name})
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {reanalyzing ? (
+                    <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-teal-700 bg-white px-2.5 py-1 rounded-lg border border-teal-200">
+                      <RefreshCw className="w-3 h-3 animate-spin text-teal-600" />
+                      Analyzing...
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleLanguageChange(language)}
+                      className="inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 bg-white hover:bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-200 transition-colors cursor-pointer shadow-2xs"
+                      title="Refresh or re-run analysis in current language"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Refresh</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Summary text */}
+              <div className="p-3 bg-white/90 border border-teal-100 rounded-xl space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-teal-900 block">
+                  Plain-Language Summary
+                </span>
+                <p className="text-slate-800 text-xs leading-relaxed font-medium">
+                  {activeReport.aiExplanation.simpleExplanation || activeReport.aiExplanation.originalFinding}
+                </p>
+              </div>
+
+              {/* Findings & Implications */}
+              {activeReport.aiExplanation.whatThisMeans && (
+                <div className="p-3 bg-white/90 border border-teal-100 rounded-xl space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-teal-900 block">
+                    Clinical Implications
+                  </span>
+                  <p className="text-slate-800 text-xs leading-relaxed">
+                    {activeReport.aiExplanation.whatThisMeans}
+                  </p>
+                </div>
+              )}
+
+              {/* Recommendations */}
+              {Array.isArray(activeReport.aiExplanation.recommendations) && activeReport.aiExplanation.recommendations.length > 0 && (
+                <div className="p-3 bg-white/90 border border-teal-100 rounded-xl space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-900 block">
+                    Practical Recommendations & Next Steps
+                  </span>
+                  <ul className="space-y-1 text-xs text-slate-700 list-disc pl-4">
+                    {activeReport.aiExplanation.recommendations.map((rec, idx) => (
+                      <li key={idx} className="leading-snug">
+                        {rec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Questions for Doctor */}
+              {Array.isArray(activeReport.aiExplanation.questionsForDoctor) && activeReport.aiExplanation.questionsForDoctor.length > 0 && (
+                <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-900 block">
+                    Recommended Questions for Your Doctor
+                  </span>
+                  <ul className="space-y-1 text-xs text-amber-950 list-disc pl-4">
+                    {activeReport.aiExplanation.questionsForDoctor.map((q, idx) => (
+                      <li key={idx} className="leading-snug">
+                        {q}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* RAG Guideline Citations */}
+              {Array.isArray(activeReport.rag_citations) && activeReport.rag_citations.length > 0 && (
+                <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    Grounded Reference Guidelines:
+                  </span>
+                  {activeReport.rag_citations.map((cite, idx) => (
+                    <span
+                      key={idx}
+                      className="text-[10px] bg-white border border-teal-200 text-teal-800 font-bold px-2 py-0.5 rounded shadow-2xs"
+                    >
+                      {typeof cite === 'string' ? cite : cite.guideline || cite.source || 'Clinical Guideline'}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 3. LAB VALUE TABLE */}
           <div className="space-y-2">
@@ -305,7 +445,7 @@ export default function ReportReader({
                     variant="outline"
                     size="sm"
                     icon={Columns}
-                    onClick={() => onOpenComparison(report)}
+                    onClick={() => onOpenComparison(activeReport)}
                     className="text-xs"
                   >
                     Compare Previous
@@ -316,7 +456,7 @@ export default function ReportReader({
                     variant="outline"
                     size="sm"
                     icon={TrendingUp}
-                    onClick={() => onOpenTrend(report)}
+                    onClick={() => onOpenTrend(activeReport)}
                     className="text-xs"
                   >
                     View Trend
@@ -326,7 +466,7 @@ export default function ReportReader({
             </div>
 
             <LabResultsTable
-              parameters={report.parameters || []}
+              parameters={activeReport.parameters || []}
               onSelectParameter={setSelectedParamForDetail}
               isEasyMode={viewMode === 'easy'}
               language={language}
@@ -348,7 +488,7 @@ export default function ReportReader({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-              {(report.terms || ['Hemoglobin', 'WBC', 'Platelets', 'Reference Range']).map((tKey) => (
+              {(activeReport.terms || ['Hemoglobin', 'WBC', 'Platelets', 'Reference Range']).map((tKey) => (
                 <MedicalTermCard key={tKey} termKey={tKey} language={language} />
               ))}
             </div>
@@ -356,9 +496,9 @@ export default function ReportReader({
 
           {/* 16. DOCTOR REVIEW SECTION */}
           <DoctorReview
-            doctorReview={report.doctorReview}
-            defaultDoctor={report.doctor}
-            reportName={report.reportName}
+            doctorReview={activeReport.doctorReview}
+            defaultDoctor={activeReport.doctor}
+            reportName={activeReport.reportName}
           />
 
           {/* Mandatory Patient Safety Reminder (Requirement 19) */}
@@ -387,7 +527,7 @@ export default function ReportReader({
       {/* Slide-out / Modal for Clicked Parameter Details (Requirement 4 & 5) */}
       <LabResultDetails
         parameter={selectedParamForDetail}
-        report={report}
+        report={activeReport}
         isOpen={!!selectedParamForDetail}
         onClose={() => setSelectedParamForDetail(null)}
         language={language}
@@ -436,7 +576,7 @@ export default function ReportReader({
                   1. {getUiText('whatIsThisReport', language) || 'What is this report?'}
                 </strong>
                 <p className="text-slate-700 leading-relaxed font-medium">
-                  {repTrans?.whatIsThisReport || report.whatIsThisReport}
+                  {repTrans?.whatIsThisReport || activeReport.aiExplanation?.simpleExplanation || activeReport.whatIsThisReport}
                 </p>
               </div>
 
@@ -446,7 +586,7 @@ export default function ReportReader({
                   2. What tests are included in this report?
                 </strong>
                 <p className="text-slate-700 leading-relaxed">
-                  This report includes measurements for: {report.parameters?.map((p) => p.name).join(', ')}.
+                  This report includes measurements for: {activeReport.parameters?.map((p) => p.name).join(', ')}.
                 </p>
               </div>
 
@@ -492,10 +632,10 @@ export default function ReportReader({
                   5. What does each important test measure?
                 </strong>
                 <div className="space-y-1.5 pt-1">
-                  {report.parameters?.map((p) => (
+                  {activeReport.parameters?.map((p) => (
                     <div key={p.name} className="p-2 bg-white rounded-lg border border-slate-200">
                       <strong className="text-slate-900">{p.name}: </strong>
-                      <span className="text-slate-700">{p.purpose || p.easyMeaning}</span>
+                      <span className="text-slate-700">{p.purpose || p.easyMeaning || p.meaning}</span>
                     </div>
                   ))}
                 </div>
@@ -507,7 +647,7 @@ export default function ReportReader({
                   6. What do the medical terms mean?
                 </strong>
                 <div className="space-y-1.5 pt-1">
-                  {(report.terms || ['Hemoglobin', 'Reference Range']).map((t) => (
+                  {(activeReport.terms || ['Hemoglobin', 'Reference Range']).map((t) => (
                     <div key={t} className="p-2 bg-white rounded-lg border border-slate-200">
                       <strong className="text-slate-900">{t}: </strong>
                       <span className="text-slate-700">
@@ -530,7 +670,7 @@ export default function ReportReader({
                   7. {getUiText('whatShouldIDo', language) || 'What should I discuss with my doctor?'}
                 </strong>
                 <p className="text-slate-800 leading-relaxed font-medium">
-                  {repTrans?.whatThisMeans || report.doctorReview?.note || 'Review any results outside the displayed range together with your overall symptoms, current medications, and routine lifestyle.'}
+                  {repTrans?.whatThisMeans || activeReport.aiExplanation?.whatThisMeans || activeReport.doctorReview?.note || 'Review any results outside the displayed range together with your overall symptoms, current medications, and routine lifestyle.'}
                 </p>
                 <p className="text-[11px] text-slate-500 pt-1">
                   Tip: {getUiText('doctorDiscussionAdvisory', language)}

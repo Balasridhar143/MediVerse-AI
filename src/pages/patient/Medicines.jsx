@@ -61,7 +61,14 @@ export default function Medicines() {
   const [explainSimply, setExplainSimply] = useState(true);
 
   // Universal Language Selection (Requirement 4)
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const [selectedLanguage, setSelectedLanguage] = useState(() => {
+    return localStorage.getItem('mediverse_patient_language') || 'en';
+  });
+
+  const handleLanguageUpdate = (lang) => {
+    setSelectedLanguage(lang);
+    localStorage.setItem('mediverse_patient_language', lang);
+  };
 
   // Load real prescribed medicines & adherence logs
   useEffect(() => {
@@ -359,7 +366,10 @@ export default function Medicines() {
       </div>
 
       {activeTab === 'database' ? (
-        <MedicineDatabaseViewer />
+        <MedicineDatabaseViewer
+          language={selectedLanguage}
+          onLanguageChange={handleLanguageUpdate}
+        />
       ) : (
         <>
           {/* 2. Medical Care Controls Bar: Explain Simply + Universal Language Selector */}
@@ -402,7 +412,7 @@ export default function Medicines() {
           {/* Universal Multi-Language Selector (Requirement 4: 14 languages) */}
           <LanguageSelector
             language={selectedLanguage}
-            onChangeLanguage={(lang) => setSelectedLanguage(lang)}
+            onChangeLanguage={handleLanguageUpdate}
           />
         </div>
       </div>

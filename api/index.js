@@ -1865,8 +1865,12 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
       report_type = 'Blood Tests',
       hospital = 'Accredited Diagnostic Laboratory',
       doctor = 'Attending Physician',
-      raw_text = ''
+      raw_text = '',
+      language = 'en',
+      lang
     } = req.body;
+
+    const targetLang = lang || language || 'en';
 
     let fileBuffer = null;
     if (file_data) {
@@ -1878,7 +1882,7 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
       }
     }
 
-    // Execute End-to-End RAG Analysis
+    // Execute End-to-End RAG Analysis with Language Support
     const ragAnalysis = await executeMedicalReportRAGPipeline({
       fileBuffer,
       fileName: file_name,
@@ -1886,7 +1890,8 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
       patientName: patient_name || (user && user.full_name) || 'Patient',
       reportType: report_type,
       hospital,
-      rawText: raw_text
+      rawText: raw_text,
+      language: targetLang
     });
 
     const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
@@ -2003,6 +2008,71 @@ app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res)
   } catch (err) {
     console.error('Download report error:', err);
     return res.status(500).json({ detail: `Failed to download document: ${err.message}` });
+  }
+});
+
+// Re-analyze or translate existing report in selected language (no re-upload needed)
+app.post(['/reports/:id/reanalyze', '/api/reports/:id/reanalyze'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { language = 'en', lang } = req.body || {};
+    const targetLang = lang || language || 'en';
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, user_id, patient_name, report_name, report_type, hospital, doctor,
+             file_name, file_type, file_data, extracted_text
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    const rep = rows[0];
+    let fileBuffer = null;
+    if (rep.file_data) {
+      try {
+        const base64Content = rep.file_data.replace(/^data:[^;]+;base64,/, '');
+        fileBuffer = Buffer.from(base64Content, 'base64');
+      } catch (be) {
+        console.warn('Base64 decode warning during re-analysis:', be.message);
+      }
+    }
+
+    const ragAnalysis = await executeMedicalReportRAGPipeline({
+      fileBuffer,
+      fileName: rep.file_name,
+      mimeType: rep.file_type,
+      patientName: rep.patient_name,
+      reportType: rep.report_type,
+      hospital: rep.hospital,
+      rawText: rep.extracted_text,
+      language: targetLang
+    });
+
+    await sql`
+      UPDATE medical_reports
+      SET parameters = ${JSON.stringify(ragAnalysis.parameters || [])},
+          structured_data = ${JSON.stringify(ragAnalysis.structured_data || {})},
+          ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+          updated_at = NOW()
+      WHERE id = ${id};
+    `;
+
+    return res.json({
+      success: true,
+      report_id: id,
+      language: targetLang,
+      rag_analysis: ragAnalysis
+    });
+  } catch (err) {
+    console.error('Report re-analysis error:', err);
+    return res.status(500).json({ detail: `Failed to re-analyze report: ${err.message}` });
   }
 });
 
@@ -2240,9 +2310,10 @@ app.get(['/medicines/knowledge-base', '/api/medicines/knowledge-base'], async (r
 app.get(['/medicines/:id/knowledge', '/api/medicines/:id/knowledge'], async (req, res) => {
   try {
     const { id } = req.params;
+    const lang = req.query.lang || req.query.language || 'en';
     const targetId = String(id).toLowerCase().trim();
 
-    const rawMed = EXPANDED_MEDICINES.find(m => {
+    let rawMed = EXPANDED_MEDICINES.find(m => {
       const mId = String(m.id).toLowerCase();
       const numPart = mId.replace(/[^0-9]/g, '');
       const targetNum = targetId.replace(/[^0-9]/g, '');
@@ -2252,16 +2323,23 @@ app.get(['/medicines/:id/knowledge', '/api/medicines/:id/knowledge'], async (req
     });
 
     if (!rawMed) {
+      rawMed = CLINICAL_MEDICINES.find(m => {
+        const mId = String(m.id).toLowerCase();
+        return mId === targetId || (m.brand_name && m.brand_name.toLowerCase() === targetId);
+      });
+    }
+
+    if (!rawMed) {
       return res.status(404).json({ detail: `Medicine not found for identifier: ${id}` });
     }
 
-    const enriched = enrichMedicineKnowledge(rawMed);
+    const enriched = enrichMedicineKnowledge(rawMed, lang);
 
     // Find related medicines (same category or active class, excluding self)
     const related = EXPANDED_MEDICINES
       .filter(m => m.id !== rawMed.id && (m.category === rawMed.category || (rawMed.generic_name && m.generic_name && m.generic_name.split(' ')[0] === rawMed.generic_name.split(' ')[0])))
       .slice(0, 4)
-      .map(enrichMedicineKnowledge);
+      .map(m => enrichMedicineKnowledge(m, lang));
 
     return res.json({
       medicine: enriched,
@@ -5219,6 +5297,7 @@ app.get(['/medicines/compare', '/api/medicines/compare'], (req, res) => {
 
 app.get(['/medicines/:id', '/api/medicines/:id'], (req, res) => {
   const { id } = req.params;
+  const lang = req.query.lang || req.query.language || 'en';
   const target = String(id).toLowerCase().trim();
   let med = CLINICAL_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
   if (!med) {
@@ -5227,7 +5306,7 @@ app.get(['/medicines/:id', '/api/medicines/:id'], (req, res) => {
   if (!med) {
     return res.status(404).json({ detail: `Medicine '${id}' not found in clinical database.` });
   }
-  return res.json(med);
+  return res.json(enrichMedicineKnowledge(med, lang));
 });
 
 app.get(['/medicines/:id/safety', '/api/medicines/:id/safety'], (req, res) => {

@@ -51,7 +51,18 @@ export default function MedicalReports() {
   // Modals & Reader States
   const [activeReaderReport, setActiveReaderReport] = useState(null);
   const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [globalLanguage, setGlobalLanguage] = useState('en');
+  const [globalLanguage, setGlobalLanguage] = useState(() => {
+    return localStorage.getItem('mediverse_patient_language') || 'en';
+  });
+
+  const handleGlobalLanguageChange = (lang) => {
+    setGlobalLanguage(lang);
+    try {
+      localStorage.setItem('mediverse_patient_language', lang);
+    } catch (e) {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     loadReports();
@@ -182,7 +193,7 @@ export default function MedicalReports() {
 
           <UniversalLanguageSelector
             language={globalLanguage}
-            onChangeLanguage={setGlobalLanguage}
+            onChangeLanguage={handleGlobalLanguageChange}
           />
         </div>
       </div>
@@ -603,6 +614,7 @@ export default function MedicalReports() {
       <ReportReader
         report={activeReaderReport}
         isOpen={!!activeReaderReport}
+        initialLanguage={globalLanguage}
         onClose={() => setActiveReaderReport(null)}
         onOpenComparison={(rep) => {
           setActiveReaderReport(null);

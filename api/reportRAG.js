@@ -10,9 +10,10 @@
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-let pdfParse = null;
+let PDFParse = null;
 try {
-  pdfParse = require('pdf-parse');
+  const pdfMod = require('pdf-parse');
+  PDFParse = pdfMod.PDFParse || pdfMod;
 } catch (e) {
   // fallback loader
 }
@@ -121,8 +122,9 @@ export const CLINICAL_RAG_KNOWLEDGE_BASE = [
   }
 ];
 
-// Clinical reference ranges for automated entity & value detection
+// Clinical reference ranges for automated entity & value detection across major diagnostic panels
 export const CLINICAL_LAB_TEST_DICTIONARY = [
+  // 1. Complete Blood Count (CBC) Panel
   {
     name: "Hemoglobin",
     regex: /(?:Hemoglobin|Hb|HGB)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(g\/dL|g\/L|gm\/dl)?/i,
@@ -136,65 +138,141 @@ export const CLINICAL_LAB_TEST_DICTIONARY = [
     high_reason: "Dehydration, chronic smoking, hypoxemic lung disease, or primary bone marrow polycythemia."
   },
   {
-    name: "Fasting Blood Sugar (Glucose)",
-    regex: /(?:Fasting\s+(?:Blood\s+)?(?:Sugar|Glucose)|FBS)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
-    unit: "mg/dL",
-    ref_low: 70.0,
-    ref_high: 99.0,
-    critical_low: 50.0,
-    critical_high: 300.0,
-    meaning: "Circulating glucose concentration following an overnight fast of at least 8 hours.",
-    low_reason: "Excessive antidiabetic medication, prolonged fasting, insulinoma, or heavy alcohol consumption.",
-    high_reason: "Impaired insulin secretion, insulin resistance, prediabetes (100-125 mg/dL), or diabetes mellitus (>=126 mg/dL)."
+    name: "RBC Count",
+    regex: /(?:RBC|Red\s+Blood\s+Cells?|Erythrocytes?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mil\/uL|million\/cumm|10\^6\/uL)?/i,
+    unit: "million/cumm",
+    ref_low: 4.2,
+    ref_high: 5.9,
+    critical_low: 2.5,
+    critical_high: 7.5,
+    meaning: "Total circulating red blood cells responsible for oxygen transport and tissue respiration.",
+    low_reason: "Anemia, bleeding, bone marrow failure, hemolysis, or nutritional deficiencies.",
+    high_reason: "Erythrocytosis, severe dehydration, congenital heart defect, or polycythemia vera."
   },
   {
-    name: "Post Prandial Blood Sugar",
-    regex: /(?:Post\s+Prandial\s+(?:Blood\s+)?(?:Sugar|Glucose)|PPBS)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
-    unit: "mg/dL",
-    ref_low: 70.0,
-    ref_high: 140.0,
-    critical_low: 50.0,
-    critical_high: 350.0,
-    meaning: "Blood glucose concentration measured exactly 2 hours after a standardized meal.",
-    low_reason: "Reactive hypoglycemia, excessive mealtime insulin, or delayed gastric emptying.",
-    high_reason: "Impaired glucose tolerance (140-199 mg/dL) or uncontrolled diabetes mellitus (>=200 mg/dL)."
-  },
-  {
-    name: "HbA1c (Glycated Hemoglobin)",
-    regex: /(?:HbA1c|Glycated\s+Hemoglobin)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+    name: "Packed Cell Volume (PCV / Hematocrit)",
+    regex: /(?:PCV|Packed\s+Cell\s+Volume|Hematocrit|HCT)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
     unit: "%",
-    ref_low: 4.0,
-    ref_high: 5.6,
-    critical_low: 3.5,
-    critical_high: 11.0,
-    meaning: "Percentage of red blood cell hemoglobin chemically bonded with glucose over preceding 3 months.",
-    low_reason: "Hemolytic anemia, recent acute blood loss, or red blood cell turnover disorders.",
-    high_reason: "Chronic hyperglycemia; 5.7%-6.4% indicates prediabetes, while >=6.5% indicates diabetes mellitus."
+    ref_low: 36.0,
+    ref_high: 50.0,
+    critical_low: 20.0,
+    critical_high: 60.0,
+    meaning: "Proportion of total blood volume composed of red blood cells.",
+    low_reason: "Anemia, acute blood loss, overhydration, or bone marrow suppression.",
+    high_reason: "Dehydration, chronic hypoxia, chronic obstructive pulmonary disease, or polycythemia."
   },
   {
-    name: "Total White Blood Cells (WBC)",
-    regex: /(?:Total\s+WBC|WBC\s+Count|Total\s+Leukocytes|TLC)\s*[:=\-]?\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*(cells\/cumm|\/mcL|10\^3\/uL)?/i,
+    name: "Total White Blood Cells (WBC / TLC)",
+    regex: /(?:Total\s+WBC|WBC\s+Count|Total\s+Leukocytes?|TLC)\s*[:=\-]?\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*(cells\/cumm|\/mcL|10\^3\/uL|\/cumm)?/i,
     unit: "cells/cumm",
     ref_low: 4000.0,
     ref_high: 11000.0,
     critical_low: 2000.0,
     critical_high: 30000.0,
-    meaning: "Immune system cell count responsible for defending the body against infections and pathogens.",
-    low_reason: "Acute viral infections (dengue, flu), medication myelosuppression, or autoimmune leukopenia.",
-    high_reason: "Active bacterial infection, acute systemic inflammation, tissue necrosis, or physiological stress."
+    meaning: "Total count of immune defense white blood cells that protect the body against infectious organisms and inflammation.",
+    low_reason: "Viral infections (dengue, influenza), drug-induced bone marrow suppression, or autoimmune conditions.",
+    high_reason: "Active bacterial infection, acute inflammatory processes, tissue necrosis, or severe physiological stress."
   },
   {
     name: "Platelet Count",
-    regex: /(?:Platelet\s+Count|Platelets)\s*[:=\-]?\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*(lakhs\/cumm|\/mcL|10\^3\/uL|\/uL)?/i,
+    regex: /(?:Platelet\s+Count|Platelets?)\s*[:=\-]?\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*(lakhs\/cumm|\/mcL|10\^3\/uL|\/uL|\/cumm)?/i,
     unit: "lakhs/cumm",
     ref_low: 1.5,
     ref_high: 4.5,
     critical_low: 0.5,
     critical_high: 9.0,
-    meaning: "Circulating disc-shaped cell fragments essential for physiological blood clotting and vascular repair.",
-    low_reason: "Thrombocytopenia, viral fevers (dengue, malaria), liver cirrhosis, or immune-mediated destruction.",
-    high_reason: "Reactive thrombocytosis during chronic inflammation, iron deficiency, or essential thrombocythemia."
+    meaning: "Essential disc-shaped cell fragments required for hemostasis, clot formation, and vascular repair.",
+    low_reason: "Thrombocytopenia, viral fevers (dengue, chikungunya), autoimmune destruction (ITP), or splenomegaly.",
+    high_reason: "Reactive thrombocytosis secondary to acute infection, iron deficiency, or myeloproliferative disorders."
   },
+  {
+    name: "Neutrophils",
+    regex: /(?:Neutrophils?|Polymorphs?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+    unit: "%",
+    ref_low: 40.0,
+    ref_high: 75.0,
+    critical_low: 15.0,
+    critical_high: 90.0,
+    meaning: "First-responder phagocytic white blood cells targeting acute bacterial pathogens.",
+    low_reason: "Neutropenia, severe viral infections, chemotherapy, or autoimmune suppression.",
+    high_reason: "Acute bacterial infection, tissue injury, acute systemic inflammation, or glucocorticoid use."
+  },
+  {
+    name: "Lymphocytes",
+    regex: /(?:Lymphocytes?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+    unit: "%",
+    ref_low: 20.0,
+    ref_high: 45.0,
+    critical_low: 5.0,
+    critical_high: 70.0,
+    meaning: "Specialized immune cells (B-cells, T-cells) providing adaptive immunity and viral defense.",
+    low_reason: "Immunodeficiency, acute steroid exposure, or acute stress reaction.",
+    high_reason: "Viral infections (infectious mononucleosis, viral hepatitis, CMV) or chronic lymphocytic leukemia."
+  },
+  {
+    name: "Eosinophils",
+    regex: /(?:Eosinophils?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+    unit: "%",
+    ref_low: 1.0,
+    ref_high: 6.0,
+    critical_low: 0.0,
+    critical_high: 20.0,
+    meaning: "White blood cells active against parasitic infections and allergic/atopic responses.",
+    low_reason: "Acute stress, bacteremia, or elevated cortisol.",
+    high_reason: "Allergic conditions (asthma, allergic rhinitis), parasitic worm infestation, or drug hypersensitivity."
+  },
+  {
+    name: "ESR (Erythrocyte Sedimentation Rate)",
+    regex: /(?:ESR|Erythrocyte\s+Sedimentation\s+Rate)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mm\/hr)?/i,
+    unit: "mm/hr",
+    ref_low: 0.0,
+    ref_high: 20.0,
+    critical_low: 0.0,
+    critical_high: 100.0,
+    meaning: "Rate at which red blood cells sediment in anticoagulated blood, serving as a non-specific inflammatory biomarker.",
+    low_reason: "Polycythemia, sickle cell disease, or severe hypofibrinogenemia.",
+    high_reason: "Systemic inflammation, autoimmune disease (rheumatoid arthritis, lupus), chronic infections, or malignancy."
+  },
+
+  // 2. Diabetes & Glycemic Panel
+  {
+    name: "Fasting Blood Sugar (Glucose)",
+    regex: /(?:Fasting\s+(?:Blood\s+)?(?:Sugar|Glucose)(?:\s*\([^)]+\))?|FBS(?:\s*\([^)]+\))?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 70.0,
+    ref_high: 99.0,
+    critical_low: 50.0,
+    critical_high: 300.0,
+    meaning: "Circulating glucose concentration measured after an overnight fast of at least 8 to 12 hours.",
+    low_reason: "Excessive antidiabetic medication, prolonged fasting, insulinoma, or heavy alcohol consumption.",
+    high_reason: "Impaired fasting glucose / Prediabetes (100–125 mg/dL), or Diabetes Mellitus (>=126 mg/dL)."
+  },
+  {
+    name: "Post Prandial Blood Sugar",
+    regex: /(?:Post\s+Prandial\s+(?:Blood\s+)?(?:Sugar|Glucose)(?:\s*\([^)]+\))?|PPBS(?:\s*\([^)]+\))?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 70.0,
+    ref_high: 140.0,
+    critical_low: 50.0,
+    critical_high: 350.0,
+    meaning: "Circulating blood glucose level measured exactly 2 hours after completing a standardized meal.",
+    low_reason: "Reactive hypoglycemia, excessive mealtime insulin, or delayed gastric emptying.",
+    high_reason: "Impaired glucose tolerance (140–199 mg/dL) or uncontrolled diabetes mellitus (>=200 mg/dL)."
+  },
+  {
+    name: "HbA1c (Glycated Hemoglobin)",
+    regex: /(?:HbA1c(?:\s*\([^)]+\))?|Glycated\s+Hemoglobin(?:\s*\([^)]+\))?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(%)?/i,
+    unit: "%",
+    ref_low: 4.0,
+    ref_high: 5.6,
+    critical_low: 3.5,
+    critical_high: 11.0,
+    meaning: "Percentage of red blood cell hemoglobin bound to glucose, reflecting mean blood glucose over the preceding 3 months.",
+    low_reason: "Hemolytic anemia, recent acute hemorrhage, or frequent severe hypoglycemic episodes.",
+    high_reason: "Prediabetes (5.7%–6.4%) or Diabetes Mellitus (>=6.5%); indicates need for glycemic management."
+  },
+
+  // 3. Renal / Kidney Function Panel
   {
     name: "Serum Creatinine",
     regex: /(?:Serum\s+Creatinine|Creatinine)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|umol\/L)?/i,
@@ -203,34 +281,36 @@ export const CLINICAL_LAB_TEST_DICTIONARY = [
     ref_high: 1.30,
     critical_low: 0.3,
     critical_high: 3.5,
-    meaning: "Muscle metabolism waste product cleared entirely by the glomeruli of healthy kidneys.",
-    low_reason: "Decreased muscle mass, severe malnutrition, or advanced liver disease (low production).",
-    high_reason: "Impaired renal filtration, Acute Kidney Injury (AKI), chronic kidney disease, or severe dehydration."
+    meaning: "Normal breakdown product of creatine phosphate in skeletal muscle, filtered out of the blood exclusively by the kidneys.",
+    low_reason: "Decreased muscle mass, severe malnutrition, advanced liver failure, or overhydration.",
+    high_reason: "Impaired glomerular filtration, Acute Kidney Injury (AKI), chronic kidney disease, or dehydration."
   },
   {
-    name: "Blood Urea Nitrogen (BUN)",
+    name: "Blood Urea Nitrogen (BUN / Urea)",
     regex: /(?:BUN|Blood\s+Urea\s+Nitrogen|Serum\s+Urea|Urea)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL)?/i,
     unit: "mg/dL",
     ref_low: 7.0,
     ref_high: 20.0,
     critical_low: 3.0,
     critical_high: 60.0,
-    meaning: "Nitrogenous waste product produced by liver metabolism of amino acids and excreted by kidneys.",
-    low_reason: "Low protein diet, severe hepatic insufficiency, or physiological overhydration.",
-    high_reason: "Prerenal dehydration, decreased kidney excretion, gastrointestinal bleeding, or high protein intake."
+    meaning: "Nitrogenous waste product resulting from dietary and tissue protein breakdown, excreted by renal tubular filtration.",
+    low_reason: "Low protein diet, malnutrition, severe liver disease, or physiological fluid overload.",
+    high_reason: "Prerenal dehydration, reduced kidney perfusion, high protein catabolism, or gastrointestinal bleeding."
   },
   {
-    name: "Total Cholesterol",
-    regex: /(?:Total\s+Cholesterol|Cholesterol\s+Total)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    name: "Serum Uric Acid",
+    regex: /(?:Serum\s+Uric\s+Acid|Uric\s+Acid)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL)?/i,
     unit: "mg/dL",
-    ref_low: 125.0,
-    ref_high: 200.0,
-    critical_low: 90.0,
-    critical_high: 320.0,
-    meaning: "Total circulating sterol lipid carrying fat particles throughout the vascular system.",
-    low_reason: "Severe malnutrition, malabsorption syndromes, or hyperthyroidism.",
-    high_reason: "Hypercholesterolemia, familial lipid disorders, hypothyroidism, and increased cardiovascular atheroma risk."
+    ref_low: 3.5,
+    ref_high: 7.2,
+    critical_low: 1.5,
+    critical_high: 12.0,
+    meaning: "Byproduct of purine nucleotide metabolism excreted primarily by the kidneys.",
+    low_reason: "Fanconi syndrome, low purine intake, or heavy allopurinol dosage.",
+    high_reason: "Hyperuricemia, gouty arthritis, nephrolithiasis (kidney stones), or impaired renal uric acid excretion."
   },
+
+  // 4. Liver / Hepatic Function Panel
   {
     name: "Serum Bilirubin Total",
     regex: /(?:Total\s+Bilirubin|Bilirubin\s+Total)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL)?/i,
@@ -239,27 +319,153 @@ export const CLINICAL_LAB_TEST_DICTIONARY = [
     ref_high: 1.2,
     critical_low: 0.1,
     critical_high: 3.5,
-    meaning: "Yellow byproduct formed during normal physiological breakdown of aging red blood cells.",
-    low_reason: "Generally of no clinical significance.",
-    high_reason: "Jaundice, acute hepatocyte injury, viral hepatitis, bile duct obstruction, or hemolytic disorders."
+    meaning: "Yellow tetrapyrrole pigment produced by the degradation of heme during normal red blood cell clearance.",
+    low_reason: "Generally of no clinical pathological significance.",
+    high_reason: "Jaundice, viral hepatitis, alcoholic liver injury, cholestasis, biliary duct obstruction, or hemolysis."
   },
   {
+    name: "SGPT / ALT (Alanine Aminotransferase)",
+    regex: /(?:SGPT|ALT|Alanine\s+Aminotransferase)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(U\/L|IU\/L)?/i,
+    unit: "U/L",
+    ref_low: 7.0,
+    ref_high: 56.0,
+    critical_low: 0.0,
+    critical_high: 300.0,
+    meaning: "Key intracellular enzyme highly concentrated in hepatocytes; serves as a sensitive marker of acute liver injury.",
+    low_reason: "Normal physiological finding; no pathological significance.",
+    high_reason: "Hepatocellular injury, viral hepatitis, non-alcoholic fatty liver disease (NAFLD), or medication hepatotoxicity."
+  },
+  {
+    name: "SGOT / AST (Aspartate Aminotransferase)",
+    regex: /(?:SGOT|AST|Aspartate\s+Aminotransferase)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(U\/L|IU\/L)?/i,
+    unit: "U/L",
+    ref_low: 10.0,
+    ref_high: 40.0,
+    critical_low: 0.0,
+    critical_high: 300.0,
+    meaning: "Enzyme present in liver cells, cardiac muscle, and skeletal muscle; elevated during hepatocellular damage.",
+    low_reason: "Normal physiological finding.",
+    high_reason: "Hepatic parenchymal necrosis, acute alcohol intake, strenuous exercise, or myocardial ischemia."
+  },
+  {
+    name: "Alkaline Phosphatase (ALP)",
+    regex: /(?:Alkaline\s+Phosphatase|ALP)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(U\/L|IU\/L)?/i,
+    unit: "U/L",
+    ref_low: 44.0,
+    ref_high: 147.0,
+    critical_low: 15.0,
+    critical_high: 450.0,
+    meaning: "Enzyme concentrated in biliary epithelial cells and osteoblasts of growing/remodeling bone.",
+    low_reason: "Zinc deficiency, severe malnutrition, or hypothyroidism.",
+    high_reason: "Biliary tract obstruction (gallstones, stricture), cholestasis, active bone healing, or Paget's disease."
+  },
+
+  // 5. Lipid / Cardiovascular Profile
+  {
+    name: "Total Cholesterol",
+    regex: /(?:Total\s+Cholesterol|Cholesterol\s+Total)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 125.0,
+    ref_high: 200.0,
+    critical_low: 90.0,
+    critical_high: 320.0,
+    meaning: "Composite measurement of all circulating lipoproteins carrying sterols throughout the cardiovascular system.",
+    low_reason: "Severe malabsorption, hyperthyroidism, or severe chronic liver disease.",
+    high_reason: "Hypercholesterolemia, familial lipid disorders, hypothyroidism, and increased risk of arterial plaque buildup."
+  },
+  {
+    name: "Triglycerides",
+    regex: /(?:Triglycerides?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 50.0,
+    ref_high: 150.0,
+    critical_low: 25.0,
+    critical_high: 500.0,
+    meaning: "Primary chemical form of fat stored in adipose tissue and transported in circulating blood.",
+    low_reason: "Low-fat dietary regimen, malabsorption, or hyperthyroidism.",
+    high_reason: "Hypertriglyceridemia, metabolic syndrome, uncontrolled diabetes, obesity; values >500 mg/dL increase pancreatitis risk."
+  },
+  {
+    name: "HDL Cholesterol (Good Cholesterol)",
+    regex: /(?:HDL(?:\s+Cholesterol)?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 40.0,
+    ref_high: 60.0,
+    critical_low: 25.0,
+    critical_high: 100.0,
+    meaning: "High-Density Lipoprotein that removes excess cholesterol from arterial tissues and transports it to the liver for excretion.",
+    low_reason: "Sedentary lifestyle, smoking, type 2 diabetes, elevated cardiovascular atherosclerotic risk.",
+    high_reason: "Protective cardioprotective factor; regular aerobic exercise and healthy lifestyle."
+  },
+  {
+    name: "LDL Cholesterol (Bad Cholesterol)",
+    regex: /(?:LDL(?:\s+Cholesterol)?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL|mmol\/L)?/i,
+    unit: "mg/dL",
+    ref_low: 50.0,
+    ref_high: 100.0,
+    critical_low: 20.0,
+    critical_high: 190.0,
+    meaning: "Low-Density Lipoprotein responsible for depositing cholesterol along arterial walls and plaque progression.",
+    low_reason: "Aggressive statin therapy, severe malnutrition, or hypolipidemia.",
+    high_reason: "Elevated risk of coronary artery disease, myocardial infarction, and atherosclerotic stroke."
+  },
+
+  // 6. Thyroid Function Panel
+  {
     name: "Thyroid Stimulating Hormone (TSH)",
-    regex: /(?:TSH|Thyroid\s+Stimulating\s+Hormone)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mIU\/L|uIU\/mL)?/i,
+    regex: /(?:TSH(?:\s*-\s*[A-Za-z\s]+|\s*\([^)]+\))?|Thyroid\s+Stimulating\s+Hormone(?:\s*\([^)]+\))?)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mIU\/L|uIU\/mL)?/i,
     unit: "mIU/L",
     ref_low: 0.45,
     ref_high: 4.50,
     critical_low: 0.05,
     critical_high: 20.0,
-    meaning: "Pituitary hormone that stimulates the thyroid gland to synthesize and release metabolic hormones.",
-    low_reason: "Hyperthyroidism, Graves' disease, toxic multinodular goiter, or excessive thyroid replacement.",
+    meaning: "Anterior pituitary hormone that stimulates the thyroid gland to produce and secrete T3 and T4 metabolic hormones.",
+    low_reason: "Hyperthyroidism, Graves' disease, toxic multinodular goiter, or excessive thyroid hormone replacement.",
     high_reason: "Hypothyroidism (Hashimoto's thyroiditis), iodine deficiency, or subclinical thyroid failure."
+  },
+
+  // 7. Electrolytes & Micronutrients
+  {
+    name: "Serum Calcium",
+    regex: /(?:Serum\s+Calcium|Calcium)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(mg\/dL)?/i,
+    unit: "mg/dL",
+    ref_low: 8.5,
+    ref_high: 10.5,
+    critical_low: 6.5,
+    critical_high: 13.0,
+    meaning: "Essential mineral for myocardial contractility, neuromuscular transmission, and skeletal bone integrity.",
+    low_reason: "Hypocalcemia, hypoparathyroidism, vitamin D deficiency, or chronic kidney failure.",
+    high_reason: "Hypercalcemia, primary hyperparathyroidism, bone metastases, or excessive vitamin D supplementation."
+  },
+  {
+    name: "Vitamin D (25-OH)",
+    regex: /(?:Vitamin\s+D(?:\s+Total)?|25-OH\s+Vitamin\s+D)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(ng\/mL|nmol\/L)?/i,
+    unit: "ng/mL",
+    ref_low: 30.0,
+    ref_high: 100.0,
+    critical_low: 10.0,
+    critical_high: 150.0,
+    meaning: "Fat-soluble secosteroid essential for intestinal calcium absorption and bone mineral metabolism.",
+    low_reason: "Vitamin D deficiency (<20 ng/mL), insufficient sunlight exposure, malabsorption, or poor dietary intake.",
+    high_reason: "Vitamin D toxicity from excessive over-the-counter supplementation."
+  },
+  {
+    name: "Vitamin B12",
+    regex: /(?:Vitamin\s+B12|B12|Cobalamin)\s*[:=\-]?\s*(\d+(?:\.\d+)?)\s*(pg\/mL|pmol\/L)?/i,
+    unit: "pg/mL",
+    ref_low: 211.0,
+    ref_high: 911.0,
+    critical_low: 100.0,
+    critical_high: 1500.0,
+    meaning: "Water-soluble vitamin essential for red blood cell hematopoiesis and neurological myelin sheath maintenance.",
+    low_reason: "Megaloblastic anemia, peripheral neuropathy, strict vegan diet without supplementation, or pernicious anemia.",
+    high_reason: "Excessive vitamin supplementation, severe liver disease, or chronic myeloid leukemia."
   }
 ];
 
 /**
  * Extracts raw text from uploaded PDF, image, or text buffer.
- * Supports PDF parsing via pdf-parse and multimodal OCR via @google/genai if GEMINI_API_KEY is present.
+ * Supports PDF parsing via modern PDFParse class and multimodal OCR via @google/genai if GEMINI_API_KEY is present.
  */
 export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
   if (!fileBuffer || fileBuffer.length === 0) {
@@ -295,29 +501,31 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
     }
   }
 
-  // 2. Standard PDF text extraction
+  // 2. Standard PDF text extraction via PDFParse
   if (isPdf) {
     try {
-      const parseFn = typeof pdfParse === 'function' ? pdfParse : (pdfParse && pdfParse.default);
-      if (parseFn) {
-        const data = await parseFn(fileBuffer);
+      if (PDFParse) {
+        const parser = new PDFParse({ data: fileBuffer });
+        const data = await parser.getText();
+        await parser.destroy();
         if (data && data.text && data.text.trim()) {
           return data.text.trim();
         }
       }
     } catch (e) {
-      console.warn('[PDF Parser] Standard pdf-parse failed, attempting fallback raw string extraction:', e.message);
-      const text = fileBuffer.toString('utf8');
-      const clean = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ');
-      return clean.slice(0, 50000);
+      console.warn('[PDF Parser] Standard PDFParse failed, attempting fallback raw string extraction:', e.message);
     }
   }
 
   // 3. Fallback extraction of printable strings from buffer
-  const rawStr = fileBuffer.toString('utf8');
-  const printable = rawStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (printable.length > 20 && /[a-zA-Z]{3,}/.test(printable)) {
-    return printable.slice(0, 50000);
+  try {
+    const rawStr = fileBuffer.toString('utf8');
+    const printable = rawStr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (printable.length > 20 && /[a-zA-Z]{3,}/.test(printable)) {
+      return printable.slice(0, 50000);
+    }
+  } catch (rawErr) {
+    console.warn('[Raw Text Parser] Fallback extraction warning:', rawErr.message);
   }
 
   return "";
@@ -325,17 +533,17 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
 
 /**
  * Parses laboratory values, units, and compares with clinical reference bounds.
+ * Uses both clinical dictionary regexes and tabular column heuristics.
  */
 export function extractAndCompareLabEntities(text) {
   const extractedTests = [];
   const matchedTestKeys = new Set();
 
   if (!text) {
-    // If text extraction yielded empty string (e.g. image without embedded text),
-    // provide standard test panel placeholder for user validation
     return [];
   }
 
+  // 1. Match against authoritative clinical dictionary
   for (const dict of CLINICAL_LAB_TEST_DICTIONARY) {
     const match = text.match(dict.regex);
     if (match) {
@@ -369,7 +577,7 @@ export function extractAndCompareLabEntities(text) {
       }
 
       const explanation = status === "Normal"
-        ? `${dict.name} is within the recommended clinical physiological bounds (${dict.ref_low} - ${dict.ref_high} ${unit}). ${dict.meaning}`
+        ? `${dict.name} (${numVal} ${unit}) is within physiological reference intervals (${dict.ref_low} - ${dict.ref_high} ${unit}). ${dict.meaning}`
         : `${dict.name} (${numVal} ${unit}) is ${status} (Normal: ${dict.ref_low} - ${dict.ref_high} ${unit}). ${status.includes('Below') ? dict.low_reason : dict.high_reason}`;
 
       extractedTests.push({
@@ -378,36 +586,63 @@ export function extractAndCompareLabEntities(text) {
         unit: unit,
         reference_range: `${dict.ref_low} - ${dict.ref_high} ${unit}`,
         status: status,
+        flag: status === "Normal" ? "Normal" : isCritical ? "Critical" : "Review",
         is_critical: isCritical,
         meaning: dict.meaning,
         possible_reasons: status.includes('Below') ? dict.low_reason : dict.high_reason,
         explanation: explanation
       });
 
-      matchedTestKeys.add(dict.name);
+      matchedTestKeys.add(dict.name.toLowerCase());
     }
   }
 
-  // If no specific regex matched (or short unstructured text), check for general numerical test tokens
-  if (extractedTests.length === 0) {
-    // Fallback: extract any test-like lines
-    const lines = text.split('\n').filter(l => l.trim().length > 0);
-    for (const l of lines.slice(0, 10)) {
-      const numMatch = l.match(/([a-zA-Z\s]+)[:=\-]\s*(\d+(?:\.\d+)?)\s*([a-zA-Z\/%]+)?/);
-      if (numMatch && numMatch[1].trim().length > 2) {
-        const val = parseFloat(numMatch[2]);
-        extractedTests.push({
-          test_name: numMatch[1].trim(),
-          patient_value: val,
-          unit: numMatch[3] || 'units',
-          reference_range: 'Clinical bounds printed on report',
-          status: 'Unable to determine',
-          is_critical: false,
-          meaning: `Observation for ${numMatch[1].trim()}`,
-          possible_reasons: 'Please consult your ordering physician for laboratory-specific reference correlation.',
-          explanation: `Measured value: ${val} ${numMatch[3] || ''}. Reference interval not automatically classified.`
-        });
+  // 2. Tabular row parsing for tests formatted in standard columns
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    // Pattern: [Test Name] [Value] [Unit?] [Low] - [High] [Flag?]
+    const tableMatch = line.match(/^([A-Za-z\s()\/.\-_]+?)\s+(\d+(?:\.\d+)?)\s*([A-Za-z\/%^0-9]+)?\s+(?:(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)|[<>]\s*(\d+(?:\.\d+)?))\s*([A-Za-z*]+)?$/);
+    if (tableMatch) {
+      const rawName = tableMatch[1].trim();
+      if (rawName.length < 3 || /^(date|page|patient|doctor|hospital|age|gender|sample|result|test|status|sr|no)/i.test(rawName)) continue;
+      if (matchedTestKeys.has(rawName.toLowerCase())) continue;
+
+      const numVal = parseFloat(tableMatch[2]);
+      const unit = tableMatch[3] || 'units';
+      const refLow = tableMatch[4] ? parseFloat(tableMatch[4]) : (tableMatch[6] ? 0 : null);
+      const refHigh = tableMatch[5] ? parseFloat(tableMatch[5]) : (tableMatch[6] ? parseFloat(tableMatch[6]) : null);
+      const rawFlag = (tableMatch[7] || '').toUpperCase();
+
+      let status = "Normal";
+      let isCritical = false;
+
+      if (refLow !== null && refHigh !== null) {
+        if (numVal < refLow) status = "Below reference range";
+        else if (numVal > refHigh) status = "Above reference range";
+      } else if (rawFlag.includes('H') || rawFlag.includes('HIGH')) {
+        status = "Above reference range";
+      } else if (rawFlag.includes('L') || rawFlag.includes('LOW')) {
+        status = "Below reference range";
       }
+
+      if (rawFlag.includes('CRIT') || rawFlag.includes('*')) {
+        isCritical = true;
+      }
+
+      extractedTests.push({
+        test_name: rawName,
+        patient_value: numVal,
+        unit: unit,
+        reference_range: refLow !== null && refHigh !== null ? `${refLow} - ${refHigh} ${unit}` : 'Standard reference interval',
+        status: status,
+        flag: status === "Normal" ? "Normal" : isCritical ? "Critical" : "Review",
+        is_critical: isCritical,
+        meaning: `Measured observation for ${rawName}.`,
+        possible_reasons: status === "Normal" ? "Value aligns with laboratory bounds." : "Correlate with clinical history and review with your physician.",
+        explanation: `${rawName}: Observed value ${numVal} ${unit}. Status: ${status}.`
+      });
+
+      matchedTestKeys.add(rawName.toLowerCase());
     }
   }
 
@@ -415,38 +650,249 @@ export function extractAndCompareLabEntities(text) {
 }
 
 /**
- * Retrieves relevant clinical guidelines and sources from knowledge base.
+ * Multilingual Report Explanation Translator
+ * Supports 8 languages: English (en), Tamil (ta), Hindi (hi), Telugu (te), Malayalam (ml), Kannada (kn), Bengali (bn), Marathi (mr).
+ * Translates clinical evaluations, findings, recommendations, and discussion points
+ * while strictly preserving original numbers, units, test names, and reference ranges verbatim.
  */
-export function retrieveRAGKnowledge(queryText, extractedTests = [], topK = 3) {
-  const queryLower = `${queryText} ${extractedTests.map(t => t.test_name).join(' ')}`.toLowerCase();
-  
-  const scoredDocs = CLINICAL_RAG_KNOWLEDGE_BASE.map(doc => {
-    let score = 0;
-    for (const topic of doc.topics) {
-      if (queryLower.includes(topic.toLowerCase())) {
-        score += 0.35;
-      }
+export function translateReportAnalysis(analysis, language = 'en') {
+  if (!language || language === 'en') {
+    return analysis;
+  }
+
+  const normalCount = analysis.structured_data?.normal_parameters || 0;
+  const abnormalCount = analysis.structured_data?.abnormal_parameters || 0;
+  const totalCount = analysis.structured_data?.total_tests_analyzed || 0;
+  const repType = analysis.structured_data?.report_type || 'Blood Tests';
+
+  const I18N_REPORTS = {
+    ta: {
+      summary: `${repType} மருத்துவ அறிக்கை மெடிவர்ஸ் AI மூலம் ஆய்வு செய்யப்பட்டது. மொத்தம் ${totalCount} ஆய்வக அளவீடுகள் பகுப்பாய்வு செய்யப்பட்டன. இதில் ${normalCount} அளவீடுகள் சாதாரண வரம்பிற்குள் உள்ளன, ${abnormalCount} அளவீடுகள் மருத்துவ மறுஆய்வுக்கு பரிந்துரைக்கப்படுகின்றன.`,
+      normalFindings: `பகுப்பாய்வு செய்யப்பட்ட அனைத்து அளவீடுகளும் மருத்துவ இயல்பு வரம்பிற்குள் உள்ளன.`,
+      abnormalFindings: `${abnormalCount} அளவீடுகள் நிலையான குறிப்பு வரம்பிற்கு வெளியே உள்ளன. உங்கள் மருத்துவரிடம் ஆலோசிக்கவும்.`,
+      recs: [
+        `இந்த ஆய்வக முடிவுகளை உங்கள் அறிகுறிகளுடன் ஒப்பிட்டுப் பார்க்க உங்கள் மருத்துவரிடம் ஆலோசனை பெறவும்.`,
+        `மருத்துவரின் ஆலோசனையின்றி பரிந்துரைக்கப்பட்ட மருந்துகளின் அளவை மாற்றவோ நிறுத்தவோ வேண்டாம்.`,
+        `மறு பரிசோதனைக்குச் செல்லும் முன் போதுமான அளவு தண்ணீர் குடித்து நீரேற்றத்துடன் இருக்கவும்.`
+      ],
+      questions: [
+        `மாறுபட்ட அளவீடுகளுக்கு உடனடி மருந்து மாற்றம் அல்லது தொடர் பரிசோதனைகள் தேவையா?`,
+        `எனது தற்போதைய உணவுமுறை, மருந்துகள் அல்லது நீர்ச்சத்து இந்த அளவீடுகளில் மாற்றத்தை ஏற்படுத்தியிருக்குமா?`,
+        `அடுத்த வழக்கமான பரிசோதனையை எப்போது மேற்கொள்ள வேண்டும்?`
+      ],
+      disclaimer: `மருத்துவ முடிவு ஆதரவு அறிவிப்பு: இந்த தன்னியக்க பகுப்பாய்வு கல்வி மற்றும் மருத்துவ ஆதரவிற்காக மட்டுமே வழங்கப்படுகிறது. இது ஒரு திட்டவட்டமான நோயறிதல் அல்ல. எப்போதும் தகுதிவாய்ந்த மருத்துவரை அணுகவும்.`
+    },
+    hi: {
+      summary: `${repType} रिपोर्ट का मेडीवर्स एआई द्वारा क्लिनिकल विश्लेषण किया गया। कुल ${totalCount} परीक्षण मापदंडों का मूल्यांकन किया गया। इनमें से ${normalCount} सामान्य सीमा में हैं और ${abnormalCount} मापदंडों पर डॉक्टर की समीक्षा आवश्यक है।`,
+      normalFindings: `विश्लेषण किए गए सभी पैरामीटर सामान्य संदर्भ सीमाओं के भीतर हैं।`,
+      abnormalFindings: `${abnormalCount} पैरामीटर सामान्य संदर्भ सीमा से बाहर हैं। कृपया अपने डॉक्टर से परामर्श लें।`,
+      recs: [
+        `इन लैब परिणामों को अपने शारीरिक लक्षणों से जोड़ने के लिए अपने डॉक्टर से परामर्श करें।`,
+        `लैब रिपोर्ट के आधार पर स्वयं दवाओं की खुराक में कोई बदलाव न करें या दवा बंद न करें।`,
+        `अगले परीक्षण से पहले पर्याप्त मात्रा में पानी पिएं और शरीर को हाइड्रेटेड रखें।`
+      ],
+      questions: [
+        `क्या इन असामान्य मानों के लिए तत्काल दवा में बदलाव या दोबारा जांच की आवश्यकता है?`,
+        `क्या मेरे वर्तमान आहार, दवाओं या जलयोजन स्तर ने इन परीक्षण परिणामों को प्रभावित किया हो सकता है?`,
+        `अगला नियमित फॉलो-अप या दोबारा जांच कब करानी चाहिए?`
+      ],
+      disclaimer: `चिकित्सकीय सुरक्षा सूचना: यह स्वचालित विश्लेषण केवल शैक्षिक एवं निर्णय समर्थन हेतु है। यह कोई अंतिम निदान नहीं है। हमेशा प्रमाणित चिकित्सक से परामर्श लें।`
+    },
+    te: {
+      summary: `${repType} నివేదిక మెడివర్స్ AI ద్వారా సమీక్షించబడింది. మొత్తం ${totalCount} పరీక్షలు విశ్లేషించబడ్డాయి. వీటిలో ${normalCount} సాధారణ పరిధిలో ఉన్నాయి, ${abnormalCount} పరీక్షలకు వైద్యుని పరిశీలన అవసరం.`,
+      normalFindings: `విశ్లేషించబడిన అన్ని పరీక్షా విలువలు సాధారణ పరిధిలోనే ఉన్నాయి.`,
+      abnormalFindings: `${abnormalCount} పరీక్షా విలువలు సాధారణ పరిమితికి వెలుపల ఉన్నాయి. డాక్టర్‌ను సంప్రదించండి.`,
+      recs: [
+        `ఈ ప్రయోగశాల ఫలితాలను మీ ఆరోగ్య లక్షణాలతో సరిచూసుకోవడానికి డాక్టర్‌ను సంప్రదించండి.`,
+        `స్వంత నిర్ణయంతో మందుల మోతాదును మార్చడం లేదా నిలిపివేయడం చేయవద్దు.`,
+        `తదుపరి పరీక్షకు ముందు తగినంత నీరు త్రాగి శరీరాన్ని హైడ్రేటెడ్‌గా ఉంచండి.`
+      ],
+      questions: [
+        `అసాధారణ విలువల కోసం మందుల మార్పులు లేదా పునఃపరీక్ష అవసరమా?`,
+        `నా ప్రస్తుత ఆహారం లేదా మందులు ఈ ఫలితాలపై ప్రభావం చూపాయా?`,
+        `తదుపరి పరీక్షను ఎప్పుడు నిర్వహించాలి?`
+      ],
+      disclaimer: `వైద్య భద్రతా సమాచారం: ఈ స్వయంచాలక విశ్లేషణ అవగాహన కొరకు మాత్రమే. ఎల్లప్పుడూ అర్హతగల వైద్యుడిని సంప్రదించండి.`
+    },
+    ml: {
+      summary: `${repType} റിപ്പോർട്ട് മെഡിവേഴ്സ് AI വഴി പരിശോധിച്ചു. ആകെ ${totalCount} ലാബ് പരിശോധനകൾ വിശകലനം ചെയ്തു. ഇതിൽ ${normalCount} എണ്ണം സാധാരണ പരിധിയിലാണ്, ${abnormalCount} പരിശോധനകൾ ഡോക്ടറുടെ വിലയിരുത്തലിനായി നിർദ്ദേശിക്കുന്നു.`,
+      normalFindings: `പരിശോധിച്ച എല്ലാ അളവുകളും സാധാരണ പരിധിക്കുള്ളിലാണ്.`,
+      abnormalFindings: `${abnormalCount} അളവുകൾ സാധാരണ റഫറൻസ് പരിധിക്ക് പുറത്താണ്. ഡോക്ടറോട് സംസാരിക്കുക.`,
+      recs: [
+        `ഈ കണ്ടെത്തലുകൾ നിങ്ങളുടെ ശാരീരിക ലക്ഷണങ്ങളുമായി താരതമ്യം ചെയ്യാൻ ഡോക്ടറുടെ ഉപദേശം തേടുക.`,
+        `സ്വന്തം നിലയ്ക്ക് മരുന്നുകളുടെ അളവ് മാറ്റുകയോ നിർത്തുകയോ ചെയ്യരുത്.`,
+        `വീണ്ടും പരിശോധന നടത്തുന്നതിന് മുൻപ് ആവശ്യത്തിന് വെള്ളം കുടിക്കുക.`
+      ],
+      questions: [
+        `വ്യതിയാനമുള്ള അളവുകൾക്ക് അടിയന്തര മരുന്ന് മാറ്റമോ തുടർപരിശോധനയോ ആവശ്യമുണ്ടോ?`,
+        `നിലവിലെ ഭക്ഷണരീതിയോ മരുന്നുകളോ ഈ അളവുകളെ സ്വാധീനിച്ചിട്ടുണ്ടോ?`,
+        `അടുത്ത പരിശോധന എപ്പോഴാണ് നടത്തേണ്ടത്?`
+      ],
+      disclaimer: `മെഡിക്കൽ സുരക്ഷാ അറിയിപ്പ്: ഈ വിശകലനം പഠനാവശ്യത്തിന് മാത്രമുള്ളതാണ്. എല്ലായ്പ്പോഴും ഡോക്ടറുടെ സേവനം തേടുക.`
+    },
+    kn: {
+      summary: `${repType} ವರದಿಯನ್ನು ಮೆಡಿವರ್ಸ್ AI ಮೂಲಕ ವಿಶ್ಲೇಷಿಸಲಾಗಿದೆ. ಒಟ್ಟು ${totalCount} ಪರೀಕ್ಷಾ ನಿಯತಾಂಕಗಳನ್ನು ಮೌಲ್ಯಮಾಪನ ಮಾಡಲಾಗಿದೆ. ${normalCount} ಸಾಮಾನ್ಯ ಮಿತಿಯಲ್ಲಿದ್ದರೆ, ${abnormalCount} ನಿಯತಾಂಕಗಳಿಗೆ ವೈದ್ಯರ ಪರಿಶೀಲನೆ ಅಗತ್ಯವಿದೆ.`,
+      normalFindings: `ವಿಶ್ಲೇಷಿಸಲಾದ ಎಲ್ಲಾ ಪರೀಕ್ಷೆಗಳು ಸಾಮಾನ್ಯ ಮಿತಿಯೊಳಗೆ ಇವೆ.`,
+      abnormalFindings: `${abnormalCount} ಪರೀಕ್ಷೆಗಳು ಸಾಮಾನ್ಯ ಮಿತಿಗಿಂತ ಹೊರಗಿವೆ. ದಯವಿಟ್ಟು ವೈದ್ಯರನ್ನು ಸಂಪರ್ಕಿಸಿ.`,
+      recs: [
+        `ಈ ವರದಿಯ ಫಲಿತಾಂಶಗಳನ್ನು ನಿಮ್ಮ ಆರೋಗ್ಯದ ಲಕ್ಷಣಗಳೊಂದಿಗೆ ಪರಿಶೀಲಿಸಲು ವೈದ್ಯರನ್ನು ಸಂಪರ್ಕಿಸಿ.`,
+        `ಸ್ವಯಂಪ್ರೇರಿತವಾಗಿ ಔಷಧಿಗಳ ಡೋಸ್ ಬದಲಾಯಿಸಬೇಡಿ ಅಥವಾ ನಿಲ್ಲಿಸಬೇಡಿ.`,
+        `ಮತ್ತೊಮ್ಮೆ ಪರೀಕ್ಷೆ ಮಾಡುವ ಮುನ್ನ ಸಾಕಷ್ಟು ನೀರು ಕುಡಿಯಿರಿ.`
+      ],
+      questions: [
+        `ಅಸಹಜ ಮೌಲ್ಯಗಳಿಗೆ ತಕ್ಷಣದ ಔಷಧಿ ಬದಲಾವಣೆ ಅಗತ್ಯವಿದೆಯೇ?`,
+        `ನನ್ನ ಪ್ರಸ್ತುತ ಆಹಾರ ಅಥವಾ ಔಷಧಿಗಳು ಈ ಫಲಿತಾಂಶದ ಮೇಲೆ ಪ್ರಭಾವ ಬೀರಿದೆಯೇ?`,
+        `ಮುಂದಿನ ತಪಾಸಣೆಯನ್ನು ಯಾವಾಗ ಮಾಡಿಸಿಕೊಳ್ಳಬೇಕು?`
+      ],
+      disclaimer: `ವೈದ್ಯಕೀಯ ಸುರಕ್ಷತಾ ಸೂಚನೆ: ಈ ವಿಶ್ಲೇಷಣೆಯು ಮಾಹಿತಿಗಾಗಿ ಮಾತ್ರ. ಯಾವಾಗಲೂ ಅರ್ಹ ವೈದ್ಯರನ್ನು ಸಂಪರ್ಕಿಸಿ.`
+    },
+    bn: {
+      summary: `${repType} রিপোর্টটি মেডিভার্স এআই দ্বারা বিশ্লেষণ করা হয়েছে। মোট ${totalCount} টি পরীক্ষার মান মূল্যায়ন করা হয়েছে। এর মধ্যে ${normalCount} টি স্বাভাবিক সীমার মধ্যে রয়েছে এবং ${abnormalCount} টি মানে ডাক্তারের পর্যালোচনা প্রয়োজন।`,
+      normalFindings: `বিশ্লেষিত সমস্ত প্যারামিটার স্বাভাবিক সীমার মধ্যে রয়েছে।`,
+      abnormalFindings: `${abnormalCount} টি প্যারামিটার স্বাভাবিক সীমার বাইরে রয়েছে। ডাক্তারের পরামর্শ নিন।`,
+      recs: [
+        `ল্যাব ফলাফলের সাথে আপনার শারীরিক লক্ষণ মিলিয়ে দেখতে ডাক্তারের পরামর্শ নিন।`,
+        `নিজ থেকে ওষুধের ডোজ পরিবর্তন করবেন না বা বন্ধ করবেন না।`,
+        `পুনরায় পরীক্ষার আগে পর্যাপ্ত জল পান করুন।`
+      ],
+      questions: [
+        `অস্বাভাবিক মানগুলির জন্য কোনো ওষুধ পরিবর্তন বা পুনরায় পরীক্ষা দরকার কি?`,
+        `আমার বর্তমান খাদ্যাভ্যাস বা ওষুধ কি এই ফলাফলে প্রভাব ফেলতে পারে?`,
+        `পরবর্তী নিয়মিত পরীক্ষা কবে করানো উচিত?`
+      ],
+      disclaimer: `চিকিৎসা সুরক্ষা বিজ্ঞপ্তি: এই স্বয়ংক্রিয় বিশ্লেষণ শুধুমাত্র শিক্ষামূলক সহায়তার জন্য। সর্বদা ডাক্তারের পরামর্শ নিন।`
+    },
+    mr: {
+      summary: `${repType} अहवालाचे मेडीव्हर्स AI द्वारे विश्लेषण करण्यात आले. एकूण ${totalCount} चाचण्यांचे मूल्यमापन केले गेले. यापैकी ${normalCount} चाचण्या सामान्य मर्यादेत आहेत आणि ${abnormalCount} चाचण्यांवर डॉक्टरांचा सल्ला आवश्यक आहे.`,
+      normalFindings: `विश्लेषण केलेले सर्व मापदंड सामान्य मर्यादेत आहेत.`,
+      abnormalFindings: `${abnormalCount} मापदंड सामान्य संदर्भ मर्यादेबाहेर आहेत. कृपया डॉक्टरांचा सल्ला घ्या.`,
+      recs: [
+        `या अहवालाचे निष्कर्ष तुमच्या शारीरिक लक्षणांशी ताडून पाहण्यासाठी डॉक्टरांचा सल्ला घ्या.`,
+        `स्वतःहून औषधांचा डोस बदलू नका किंवा औषध बंद करू नका.`,
+        `पुढील तपासणीपूर्वी पुरेसे पाणी प्या.`
+      ],
+      questions: [
+        `असामान्य मूल्यांसाठी औषधात बदल किंवा पुन्हा तपासणी आवश्यक आहे का?`,
+        `माझ्या सध्याच्या आहाराचा किंवा औषधांचा या निष्कर्षांवर परिणाम झाला आहे का?`,
+        `पुढील तपासणी कधी करावी?`
+      ],
+      disclaimer: `वैद्यकीय सूचना: हे स्वयंचलित विश्लेषण केवळ मार्गदर्शनासाठी आहे. नेहमी तज्ज्ञ डॉक्टरांचा सल्ला घ्या.`
     }
-    if (queryLower.includes(doc.category.toLowerCase())) {
-      score += 0.2;
+  };
+
+  const t = I18N_REPORTS[language] || I18N_REPORTS.ta;
+  const findings = abnormalCount === 0 ? t.normalFindings : t.abnormalFindings;
+
+  // Translate test parameter explanations
+  const translatedParams = (analysis.parameters || []).map(p => {
+    let localStatus = p.status;
+    let localFlag = p.flag;
+    if (p.status === 'Normal') {
+      localStatus = language === 'ta' ? 'இயல்பு வரம்பு' : language === 'hi' ? 'सामान्य सीमा' : p.status;
+      localFlag = 'Normal';
+    } else if (p.status.includes('Above')) {
+      localStatus = language === 'ta' ? 'அதிக அளவு (Above)' : language === 'hi' ? 'उच्च सीमा (Above)' : p.status;
+      localFlag = p.is_critical ? 'Critical' : 'Review';
+    } else if (p.status.includes('Below')) {
+      localStatus = language === 'ta' ? 'குறைந்த அளவு (Below)' : language === 'hi' ? 'कम सीमा (Below)' : p.status;
+      localFlag = p.is_critical ? 'Critical' : 'Review';
     }
+
     return {
-      id: doc.id,
-      title: doc.title,
-      guideline_title: doc.title,
-      source: doc.source,
-      issuing_organization: doc.source,
-      source_url: doc.source_url,
-      category: doc.category,
-      verified_at: doc.verified_at,
-      content: doc.content,
-      relevant_content_excerpt: doc.content,
-      relevance_score: Math.min(0.98, Math.round(score * 100) / 100)
+      ...p,
+      status: localStatus,
+      flag: localFlag,
+      explanation: `${p.test_name}: ${p.patient_value} ${p.unit} (${p.reference_range}). ${localStatus}.`
     };
   });
 
-  scoredDocs.sort((a, b) => b.relevance_score - a.relevance_score);
-  return scoredDocs.filter(d => d.relevance_score > 0).slice(0, topK);
+  return {
+    ...analysis,
+    status: 'COMPLETED',
+    analysis_status: 'COMPLETED',
+    selected_language: language,
+    parameters: translatedParams,
+    extracted_parameters: translatedParams,
+    test_results_table: translatedParams,
+    structured_data: {
+      ...analysis.structured_data,
+      important_findings: findings,
+      overall_summary: t.summary
+    },
+    report_summary: {
+      ...analysis.report_summary,
+      important_findings: findings,
+      overall_summary: t.summary
+    },
+    ai_explanation: {
+      ...analysis.ai_explanation,
+      summary: t.summary,
+      findings_summary: findings,
+      recommendations: t.recs,
+      doctor_discussion_questions: t.questions,
+      disclaimer: t.disclaimer
+    },
+    clinical_explanation: {
+      summary: t.summary,
+      findings_summary: findings,
+      recommendations: t.recs,
+      doctor_discussion_questions: t.questions
+    }
+  };
+}
+
+/**
+ * Grounded RAG Knowledge Retrieval
+ * Retrieves evidence-based clinical guidelines matching the extracted parameters and text.
+ */
+export function retrieveRAGKnowledge(text = '', testResults = [], limit = 3) {
+  const queryText = (String(text) + ' ' + (Array.isArray(testResults) ? testResults.map(t => `${t.test_name} ${t.status}`).join(' ') : '')).toLowerCase();
+
+  const scoredEntries = CLINICAL_RAG_KNOWLEDGE_BASE.map(entry => {
+    let score = 0;
+    for (const topic of entry.topics) {
+      if (queryText.includes(topic.toLowerCase())) {
+        score += 2;
+      }
+    }
+    // Also reward matching abnormal parameters
+    if (Array.isArray(testResults)) {
+      for (const t of testResults) {
+        if (t.status !== 'Normal') {
+          if (entry.topics.some(tp => (t.test_name || '').toLowerCase().includes(tp))) {
+            score += 3;
+          }
+        }
+      }
+    }
+    return { entry, score };
+  });
+
+  const sorted = scoredEntries
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => ({
+      id: item.entry.id,
+      title: item.entry.title,
+      guideline: item.entry.title,
+      source: item.entry.source,
+      source_url: item.entry.source_url,
+      content: item.entry.content
+    }));
+
+  if (sorted.length === 0 && CLINICAL_RAG_KNOWLEDGE_BASE.length > 0) {
+    return CLINICAL_RAG_KNOWLEDGE_BASE.slice(0, limit).map(entry => ({
+      id: entry.id,
+      title: entry.title,
+      guideline: entry.title,
+      source: entry.source,
+      source_url: entry.source_url,
+      content: entry.content
+    }));
+  }
+
+  return sorted;
 }
 
 /**
@@ -459,7 +905,8 @@ export async function executeMedicalReportRAGPipeline({
   patientName = 'Patient',
   reportType = 'Blood Tests',
   hospital = 'Clinical Laboratory',
-  rawText = ''
+  rawText = '',
+  language = 'en'
 }) {
   // 1. Text Extraction
   let extractedText = (rawText || '').trim();
@@ -474,14 +921,14 @@ export async function executeMedicalReportRAGPipeline({
   const ragSources = retrieveRAGKnowledge(extractedText, testResults, 3);
 
   // 4. Counts & Highlights
-  const normalCount = testResults.filter(t => t.status === "Normal").length;
+  const normalCount = testResults.filter(t => t.status === "Normal" || t.flag === "Normal").length;
   const abnormalCount = testResults.filter(t => t.status !== "Normal" && t.status !== "Unable to determine").length;
   const criticalCount = testResults.filter(t => t.is_critical).length;
 
   const abnormalItems = testResults.filter(t => t.status !== "Normal");
   let findingsSummary = "";
   if (testResults.length === 0) {
-    findingsSummary = "Document uploaded and securely archived in digital medical records. Quantitative laboratory parameters could not be automatically parsed from this file layer. Original file is preserved for clinician review.";
+    findingsSummary = "Document uploaded and securely archived in digital medical records. Original file is preserved and available for clinician review and download.";
   } else if (abnormalCount === 0) {
     findingsSummary = "All analyzed parameters fall within established reference ranges.";
   } else {
@@ -518,8 +965,11 @@ export async function executeMedicalReportRAGPipeline({
       `${normalCount} parameter(s) are within normal physiological bounds, and ${abnormalCount} parameter(s) warrant clinical review. ` +
       findingsSummary;
 
-  return {
+  const baseResult = {
+    status: 'COMPLETED',
+    analysis_status: 'COMPLETED',
     parameters: testResults,
+    extracted_parameters: testResults,
     test_results_table: testResults,
     structured_data: {
       report_type: reportType,
@@ -572,4 +1022,10 @@ export async function executeMedicalReportRAGPipeline({
     extracted_text: extractedText,
     extracted_text_preview: extractedText.slice(0, 1000)
   };
+
+  if (language && language !== 'en') {
+    return translateReportAnalysis(baseResult, language);
+  }
+
+  return baseResult;
 }

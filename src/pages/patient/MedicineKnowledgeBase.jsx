@@ -27,9 +27,22 @@ import {
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
 import Button from '../../components/Button';
+import UniversalLanguageSelector from '../../components/LanguageSelector';
 import api from '../../services/api';
 
 export default function MedicineKnowledgeBase() {
+  const [selectedLanguage, setSelectedLanguage] = useState(() => {
+    return localStorage.getItem('mediverse_patient_language') || 'en';
+  });
+
+  const handleLanguageChange = (lang) => {
+    setSelectedLanguage(lang);
+    localStorage.setItem('mediverse_patient_language', lang);
+    if (selectedMedicine) {
+      openMonograph(selectedMedicine, lang);
+    }
+  };
+
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedForm, setSelectedForm] = useState('all');
@@ -74,12 +87,12 @@ export default function MedicineKnowledgeBase() {
     }
   };
 
-  const openMonograph = async (med) => {
+  const openMonograph = async (med, reqLang = selectedLanguage) => {
     setSelectedMedicine(med);
     setMonographLoading(true);
     setRelatedMedicines([]);
     try {
-      const res = await api.get(`/medicines/${med.id}/knowledge`);
+      const res = await api.get(`/medicines/${med.id}/knowledge?lang=${reqLang}`);
       if (res.data.medicine) setSelectedMedicine(res.data.medicine);
       if (res.data.related_medicines) setRelatedMedicines(res.data.related_medicines);
     } catch (err) {
@@ -97,6 +110,12 @@ export default function MedicineKnowledgeBase() {
         badgeStatus="CDSCO & WHO EML Aligned"
         title="Medicine Knowledge Base"
         subtitle="Authoritative pharmacology, mechanisms of action, approved indications, and clinical safety precautions across verified Indian medicines."
+        action={
+          <UniversalLanguageSelector
+            language={selectedLanguage}
+            onChangeLanguage={handleLanguageChange}
+          />
+        }
       />
 
       {/* Safety Notice Banner */}
@@ -370,17 +389,70 @@ export default function MedicineKnowledgeBase() {
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setSelectedMedicine(null)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <UniversalLanguageSelector
+                  language={selectedLanguage}
+                  onChangeLanguage={handleLanguageChange}
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedMedicine(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Modal Body: Complete 16 Core Clinical Attributes */}
             <div className="p-6 space-y-6 text-xs text-slate-700">
+              {/* Patient-Friendly Explanation Summary (Requirement 2 & 3) */}
+              <div className="p-4 bg-teal-50/80 border border-teal-200 rounded-2xl space-y-3">
+                <div className="flex items-center gap-2 text-teal-950 font-extrabold text-xs">
+                  <Sparkles className="w-4 h-4 text-teal-700 shrink-0" />
+                  <span>Patient-Friendly Medical Summary</span>
+                  <span className="text-[10px] text-teal-800 bg-teal-100 px-2 py-0.5 rounded font-bold ml-auto uppercase">
+                    Simple Explanation
+                  </span>
+                </div>
+
+                <div className="space-y-2 text-slate-800 text-[11px]">
+                  <div>
+                    <strong className="text-teal-950 block">What the medicine does:</strong>
+                    <p className="text-slate-700">{selectedMedicine.patient_explanation?.what_it_does || selectedMedicine.common_medical_uses || "Acts as a therapeutic preparation for clinically diagnosed conditions."}</p>
+                  </div>
+                  <div>
+                    <strong className="text-teal-950 block">Why it is generally prescribed:</strong>
+                    <p className="text-slate-700">{selectedMedicine.patient_explanation?.why_prescribed || selectedMedicine.what_medicine_is_used_for || "Prescribed by attending physicians for verified clinical indications."}</p>
+                  </div>
+                  <div>
+                    <strong className="text-teal-950 block">How it works in the body:</strong>
+                    <p className="text-slate-700">{selectedMedicine.patient_explanation?.how_it_works_in_body || selectedMedicine.mechanism_of_action || "Interacts with targeted physiological pathways to restore normal function."}</p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                    <div className="p-2.5 bg-white border border-teal-100 rounded-xl">
+                      <strong className="text-amber-900 block mb-0.5 font-bold">Common Side Effects:</strong>
+                      <p className="text-slate-600">{selectedMedicine.patient_explanation?.common_side_effects || (Array.isArray(selectedMedicine.common_side_effects) ? selectedMedicine.common_side_effects.join(', ') : selectedMedicine.common_side_effects) || "Mild nausea, headache, or transient stomach upset."}</p>
+                    </div>
+                    <div className="p-2.5 bg-white border border-teal-100 rounded-xl">
+                      <strong className="text-teal-950 block mb-0.5 font-bold">Important Precautions:</strong>
+                      <p className="text-slate-600">{selectedMedicine.patient_explanation?.important_precautions || selectedMedicine.clinical_precautions || "Take strictly as directed. Inform doctor of all current medications."}</p>
+                    </div>
+                  </div>
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-950">
+                    <strong className="text-rose-900 block mb-0.5 font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>Warning Signs Requiring Urgent Medical Attention:</span>
+                    </strong>
+                    <p className="text-rose-900/90 text-[11px]">{selectedMedicine.patient_explanation?.warning_signs_requiring_medical_attention || (Array.isArray(selectedMedicine.serious_adverse_effects) ? selectedMedicine.serious_adverse_effects.join(', ') : selectedMedicine.serious_adverse_effects) || "Difficulty breathing, swelling of face or throat, severe rash, or sudden dizziness."}</p>
+                  </div>
+                  <div>
+                    <strong className="text-teal-950 block">What to discuss with your doctor or pharmacist:</strong>
+                    <p className="text-slate-700">{selectedMedicine.patient_explanation?.what_to_discuss_with_doctor || "Discuss your medication timeline, pre-existing liver/kidney conditions, and all concurrent therapies."}</p>
+                  </div>
+                </div>
+              </div>
+
               {/* 1. Generic vs Brand Educational Breakdown */}
               <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl space-y-1.5">
                 <div className="flex items-center gap-2 text-blue-900 font-bold text-xs">
