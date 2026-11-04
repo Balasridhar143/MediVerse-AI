@@ -213,6 +213,16 @@ export const reportService = {
    * POST /api/reports/:id/reanalyze
    * Translates or re-runs analysis on an existing uploaded report in the selected language
    */
+  async getJobStatus(jobId) {
+    try {
+      const res = await api.get(`/reports/jobs/${jobId}`);
+      return res.data;
+    } catch (e) {
+      console.warn('Job status poll notice:', e.message);
+      return null;
+    }
+  },
+
   async reanalyzeReport(id, language = 'en') {
     const res = await api.post(`/reports/${id}/reanalyze`, { language }, {
       timeout: 120000

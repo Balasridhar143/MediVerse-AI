@@ -11,7 +11,7 @@ import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_H
 import { sendOtpEmail } from './email.js';
 import { CLINICAL_DRUG_CLASSES, enrichMedicineKnowledge, MEDICAL_DISCLAIMER } from './medicineKnowledge.js';
 import { executeMedicalReportRAGPipeline, CLINICAL_RAG_KNOWLEDGE_BASE } from './reportRAG.js';
-import { validateAppointmentSlot } from './appointmentSlotValidator.js';
+import { validateAppointmentSlot, parseTimeSlotString } from './appointmentSlotValidator.js';
 
 // Load expanded persistent clinical medicines catalog (5,600+ verified CDSCO / WHO / NLEM records)
 let EXPANDED_MEDICINES = DATASET_MEDICINES;
@@ -72,21 +72,9 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Storage configuration for uploaded medical reports (PDF, JPG, JPEG, PNG up to 15MB)
-const uploadDir = path.resolve('uploads/reports');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const reportStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const uniqueSuffix = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    cb(null, `report_${uniqueSuffix}${ext}`);
-  }
-});
+// Use memoryStorage to avoid EROFS read-only filesystem errors in Vercel serverless functions.
+// All documents are persisted directly in Neon PostgreSQL cloud storage (file_data dataUrl).
+const reportStorage = multer.memoryStorage();
 
 const reportFileFilter = (req, file, cb) => {
   const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
@@ -283,6 +271,26 @@ async function ensureTables(sql) {
     await sql`ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS admin_user_id VARCHAR(64);`;
     await sql`ALTER TABLE hospitals ADD COLUMN IF NOT EXISTS admin_name VARCHAR(128);`;
     await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS hospital_id VARCHAR(64);`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS start_time VARCHAR(32);`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS end_time VARCHAR(32);`;
+    await sql`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS duration VARCHAR(32) DEFAULT '60 minutes';`;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS report_analysis_jobs (
+        id VARCHAR(64) PRIMARY KEY,
+        report_id VARCHAR(64),
+        user_id VARCHAR(64),
+        status VARCHAR(64) NOT NULL DEFAULT 'QUEUED',
+        stage VARCHAR(64) NOT NULL DEFAULT 'Queued',
+        progress INT DEFAULT 0,
+        error_message TEXT,
+        result JSONB,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_report_jobs_user_id ON report_analysis_jobs(user_id);`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_report_jobs_report_id ON report_analysis_jobs(report_id);`;
     try {
       await sql`
         UPDATE appointments apt
@@ -1944,26 +1952,21 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       lang
     } = req.body;
 
-    let fileLocation = null;
+    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
+    let fileLocation = `neon://medical_reports/${reportId}`;
     let fileBuffer = null;
 
-    if (file) {
+    if (file && file.buffer) {
       file_name = file.originalname;
       file_type = file.mimetype;
-      file_size = file.size;
-      fileLocation = file.path;
-      fileBuffer = fs.readFileSync(file.path);
+      file_size = file.size || file.buffer.length;
+      fileBuffer = file.buffer;
       file_data = `data:${file.mimetype};base64,${fileBuffer.toString('base64')}`;
     } else if (file_data) {
       try {
         const base64Data = file_data.replace(/^data:[^;]+;base64,/, '');
         fileBuffer = Buffer.from(base64Data, 'base64');
         file_size = fileBuffer.length;
-        // Also persist to disk for storage architecture consistency
-        const ext = path.extname(file_name).toLowerCase() || '.pdf';
-        const diskName = `report_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-        fileLocation = path.join(uploadDir, diskName);
-        fs.writeFileSync(fileLocation, fileBuffer);
       } catch (e) {
         console.warn('Failed to parse base64 file data:', e.message);
       }
@@ -1982,8 +1985,6 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       rawText: raw_text,
       language: targetLang
     });
-
-    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
     const todayStr = new Date().toISOString().split('T')[0];
     const sql = getDb();
     await ensureTables(sql);
@@ -2036,9 +2037,24 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       ip: req.ip
     });
 
+    const jobId = `job_${crypto.randomBytes(6).toString('hex')}`;
+    try {
+      await sql`
+        INSERT INTO report_analysis_jobs (
+          id, report_id, user_id, status, stage, progress, result, created_at, updated_at
+        ) VALUES (
+          ${jobId}, ${reportId}, ${targetUserId}, 'COMPLETED', 'Completed', 100,
+          ${JSON.stringify(ragAnalysis)}, NOW(), NOW()
+        );
+      `;
+    } catch (jobErr) {
+      console.warn('Job record notice:', jobErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       report_id: reportId,
+      job_id: jobId,
       report: {
         id: reportId,
         user_id: targetUserId,
@@ -2070,11 +2086,21 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
 app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res) => {
   try {
     const { id } = req.params;
+    let user = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+        user = decoded;
+        if (!user.id && user.sub) user.id = user.sub;
+      } catch (e) {}
+    }
+
     const sql = getDb();
     await ensureTables(sql);
 
     const rows = await sql`
-      SELECT id, report_name, file_name, file_type, file_data, file_location
+      SELECT id, user_id, patient_id, report_name, file_name, file_type, file_data, file_location
       FROM medical_reports
       WHERE id = ${id}
       LIMIT 1;
@@ -2085,14 +2111,14 @@ app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res)
     }
 
     const rep = rows[0];
+
+    // RBAC: If authenticated as patient, ensure report ownership
+    if (user && user.role === 'patient' && rep.user_id && user.id !== rep.user_id) {
+      return res.status(403).json({ detail: 'Access denied: You are not authorized to download this medical record.' });
+    }
+
     const mimeType = rep.file_type || 'application/pdf';
     const filename = rep.file_name || `${rep.report_name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
-
-    if (rep.file_location && fs.existsSync(rep.file_location)) {
-      res.setHeader('Content-Type', mimeType);
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      return fs.createReadStream(rep.file_location).pipe(res);
-    }
 
     if (rep.file_data) {
       const base64Content = rep.file_data.replace(/^data:[^;]+;base64,/, '');
@@ -2102,9 +2128,42 @@ app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res)
       res.setHeader('Content-Length', buffer.length);
       return res.end(buffer);
     }
+
+    if (rep.file_location && !rep.file_location.startsWith('neon://') && fs.existsSync(rep.file_location)) {
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return fs.createReadStream(rep.file_location).pipe(res);
+    }
+
+    return res.status(404).json({ detail: 'Document file not found for this medical report.' });
   } catch (err) {
     console.error('Download report error:', err);
     return res.status(500).json({ detail: `Failed to download document: ${err.message}` });
+  }
+});
+
+// Asynchronous Medical Report Analysis Job Polling Endpoint
+app.get(['/reports/jobs/:jobId', '/api/reports/jobs/:jobId'], async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, report_id, user_id, status, stage, progress, error_message, result, created_at, updated_at
+      FROM report_analysis_jobs
+      WHERE id = ${jobId}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ detail: 'Report analysis job not found.' });
+    }
+
+    return res.json(rows[0]);
+  } catch (err) {
+    console.error('Fetch report job error:', err);
+    return res.status(500).json({ detail: `Failed to fetch report job: ${err.message}` });
   }
 });
 
@@ -2248,30 +2307,26 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
     const finalPatientName = patient_name || patientName || patientDisplayName;
     const todayStr = date || upload_date || new Date().toISOString().split('T')[0];
 
+    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
     let actualFileBuffer = null;
     let finalFileName = file_name || 'report.pdf';
     let finalFileType = file_type || 'application/pdf';
     let finalFileSize = parseInt(file_size, 10) || 0;
     let finalFileData = file_data || null;
-    let finalFileLocation = null;
+    let finalFileLocation = `neon://medical_reports/${reportId}`;
 
-    if (file) {
+    if (file && file.buffer) {
       finalFileName = file.originalname;
       finalFileType = file.mimetype;
-      finalFileSize = file.size;
-      finalFileLocation = file.path;
-      actualFileBuffer = fs.readFileSync(file.path);
+      finalFileSize = file.size || file.buffer.length;
+      actualFileBuffer = file.buffer;
       finalFileData = `data:${file.mimetype};base64,${actualFileBuffer.toString('base64')}`;
     } else if (file_data) {
       try {
         const base64Data = file_data.replace(/^data:[^;]+;base64,/, '');
         actualFileBuffer = Buffer.from(base64Data, 'base64');
         finalFileSize = actualFileBuffer.length;
-        // Also persist to disk for storage architecture consistency
-        const ext = path.extname(finalFileName).toLowerCase() || '.pdf';
-        const diskName = `report_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
-        finalFileLocation = path.join(uploadDir, diskName);
-        fs.writeFileSync(finalFileLocation, actualFileBuffer);
+        finalFileData = file_data;
       } catch (e) {
         console.warn('Failed to parse base64 file data:', e.message);
       }
@@ -2311,7 +2366,6 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
       }
     }
 
-    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
     const sql = getDb();
     await ensureTables(sql);
 
@@ -3348,6 +3402,43 @@ app.get(['/doctor/appointments', '/api/doctor/appointments'], authenticateToken,
   }
 });
 
+// Get doctor booked slots for a specific date (enables disabling booked slots in scheduling modal)
+app.get(['/doctor/booked-slots', '/api/doctor/booked-slots'], authenticateToken, async (req, res) => {
+  try {
+    const doctorUserId = req.user.sub || req.user.id;
+    const { date, doctor_id } = req.query;
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${doctorUserId};`;
+    let targetDoctorIds = [doctorUserId, ...docRows.map(d => d.id)];
+    if (doctor_id) {
+      targetDoctorIds.push(doctor_id);
+    }
+
+    const bookedRows = await sql`
+      SELECT id, doctor_id, appointment_date, time_slot, start_time, end_time, status
+      FROM appointments
+      WHERE doctor_id = ANY(${targetDoctorIds})
+        AND appointment_date = ${targetDate}
+        AND status IN ('CONFIRMED', 'SCHEDULED', 'IN_PROGRESS');
+    `;
+
+    const bookedSlotList = bookedRows.map(r => r.time_slot).filter(Boolean);
+
+    return res.json({
+      success: true,
+      date: targetDate,
+      booked_slots: bookedSlotList,
+      appointments: bookedRows
+    });
+  } catch (err) {
+    console.error('Fetch booked slots error:', err);
+    return res.status(500).json({ detail: `Failed to fetch booked slots: ${err.message}` });
+  }
+});
+
 app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenticateToken, async (req, res) => {
   try {
     const doctorUserId = req.user.sub || req.user.id;
@@ -3383,32 +3474,58 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
     const targetDate = appointment_date || apt.appointment_date;
     const targetTime = time_slot || apt.time_slot;
 
-    // 2. Prevent conflicting double-booking on confirmation for this doctor
+    // 2. Parse start_time and end_time (each slot lasts exactly 60 minutes)
+    let computedStartTime = '10:00 AM';
+    let computedEndTime = '11:00 AM';
+    if (targetTime) {
+      const parts = targetTime.split(/[-–—]/).map(s => s.trim());
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        computedStartTime = parts[0];
+        computedEndTime = parts[1];
+      } else if (parts.length === 1 && parts[0]) {
+        computedStartTime = parts[0];
+        const parsed = parseTimeSlotString(targetTime);
+        const pad = (n) => String(n).padStart(2, '0');
+        const endHour12 = parsed.endHour % 12 === 0 ? 12 : parsed.endHour % 12;
+        const endAmPm = parsed.endHour >= 12 ? 'PM' : 'AM';
+        computedEndTime = `${endHour12}:${pad(parsed.endMinute)} ${endAmPm}`;
+      }
+    }
+
+    // 3. Prevent conflicting double-booking on confirmation for this doctor (independent doctor schedules)
     const conflict = await sql`
       SELECT id FROM appointments
       WHERE doctor_id = ${apt.doctor_id}
         AND appointment_date = ${targetDate}
-        AND time_slot = ${targetTime}
-        AND status = 'CONFIRMED'
+        AND (
+          time_slot = ${targetTime}
+          OR (start_time IS NOT NULL AND start_time = ${computedStartTime})
+        )
+        AND status IN ('CONFIRMED', 'SCHEDULED', 'IN_PROGRESS')
         AND id != ${id}
       LIMIT 1;
     `;
 
     if (conflict.length > 0) {
-      return res.status(409).json({ detail: `You already have another confirmed 1-hour appointment at ${targetTime} on ${targetDate}.` });
+      return res.status(409).json({
+        detail: `Doctor is already booked for this 1-hour time slot (${targetTime}) on ${targetDate}. Please choose another time slot.`
+      });
     }
 
-    // 3. Update status to CONFIRMED with selected 60-minute slot
+    // 4. Update status to CONFIRMED with selected 60-minute slot and start/end bounds
     await sql`
       UPDATE appointments
       SET status = 'CONFIRMED',
           appointment_date = ${targetDate},
           time_slot = ${targetTime},
+          start_time = ${computedStartTime},
+          end_time = ${computedEndTime},
+          duration = '60 minutes',
           updated_at = NOW()
       WHERE id = ${id};
     `;
 
-    // 4. Create Notification for Patient
+    // 5. Create Notification for Patient
     const notifId = `notif_${crypto.randomBytes(6).toString('hex')}`;
     const notifMessage = `Your 1-hour consultation with ${apt.doctor_name} has been confirmed for ${targetDate} at ${targetTime}.`;
     const patientLink = `/patient/appointments?id=${id}`;
@@ -3422,6 +3539,8 @@ app.patch(['/appointments/:id/accept', '/api/appointments/:id/accept'], authenti
       status: 'CONFIRMED',
       appointment_date: targetDate,
       time_slot: targetTime,
+      start_time: computedStartTime,
+      end_time: computedEndTime,
       duration: '60 minutes',
       message: 'Appointment successfully confirmed and scheduled.',
     });

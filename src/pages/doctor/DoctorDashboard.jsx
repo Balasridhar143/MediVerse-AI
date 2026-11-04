@@ -1,6 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+
+export const TWENTY_FOUR_HOURLY_SLOTS = [
+  "12:00 AM – 1:00 AM",
+  "1:00 AM – 2:00 AM",
+  "2:00 AM – 3:00 AM",
+  "3:00 AM – 4:00 AM",
+  "4:00 AM – 5:00 AM",
+  "5:00 AM – 6:00 AM",
+  "6:00 AM – 7:00 AM",
+  "7:00 AM – 8:00 AM",
+  "8:00 AM – 9:00 AM",
+  "9:00 AM – 10:00 AM",
+  "10:00 AM – 11:00 AM",
+  "11:00 AM – 12:00 PM",
+  "12:00 PM – 1:00 PM",
+  "1:00 PM – 2:00 PM",
+  "2:00 PM – 3:00 PM",
+  "3:00 PM – 4:00 PM",
+  "4:00 PM – 5:00 PM",
+  "5:00 PM – 6:00 PM",
+  "6:00 PM – 7:00 PM",
+  "7:00 PM – 8:00 PM",
+  "8:00 PM – 9:00 PM",
+  "9:00 PM – 10:00 PM",
+  "10:00 PM – 11:00 PM",
+  "11:00 PM – 12:00 AM"
+];
+
+
 import { appointmentService, doctorService } from '../../services/api';
 import PageHeader from '../../components/PageHeader';
 import Card from '../../components/Card';
@@ -50,7 +79,8 @@ export default function DoctorDashboard() {
   const [acceptModalOpen, setAcceptModalOpen] = useState(false);
   const [acceptingApt, setAcceptingApt] = useState(null);
   const [scheduledDate, setScheduledDate] = useState('');
-  const [scheduledTime, setScheduledTime] = useState('10:00 AM');
+  const [scheduledTime, setScheduledTime] = useState('10:00 AM – 11:00 AM');
+  const [bookedSlots, setBookedSlots] = useState([]);
 
   const fetchDoctorData = async () => {
     setLoading(true);
@@ -97,11 +127,60 @@ export default function DoctorDashboard() {
     }
   }, [targetAptId, appointments]);
 
-  const handleOpenAccept = (apt) => {
+  const fetchBookedSlots = async (targetDate, doctorId) => {
+    try {
+      const res = await appointmentService.getBookedSlots(targetDate, doctorId);
+      const booked = res?.booked_slots || [];
+      setBookedSlots(booked);
+      return booked;
+    } catch (e) {
+      const localBooked = appointments
+        .filter((a) => (a.date === targetDate || a.appointment_date === targetDate) && a.status === 'CONFIRMED')
+        .map((a) => a.time || a.time_slot)
+        .filter(Boolean);
+      setBookedSlots(localBooked);
+      return localBooked;
+    }
+  };
+
+  const isSlotBooked = (slotLabel) => {
+    if (bookedSlots && (bookedSlots.includes(slotLabel) || bookedSlots.some(b => b && (b === slotLabel || slotLabel.startsWith(b) || b.startsWith(slotLabel))))) {
+      return true;
+    }
+    return appointments.some((a) => {
+      if (a.id === acceptingApt?.id) return false;
+      if (a.status !== 'CONFIRMED' && a.status !== 'SCHEDULED') return false;
+      const aptDate = a.date || a.appointment_date;
+      const aptTime = a.time || a.time_slot;
+      return aptDate === scheduledDate && (aptTime === slotLabel || slotLabel.startsWith(aptTime) || (aptTime && aptTime.startsWith(slotLabel)));
+    });
+  };
+
+  const handleOpenAccept = async (apt) => {
     setAcceptingApt(apt);
-    setScheduledDate(apt.date || new Date().toISOString().split('T')[0]);
-    setScheduledTime(apt.time || '10:00 AM');
+    const initialDate = apt.date || new Date().toISOString().split('T')[0];
+    setScheduledDate(initialDate);
+    const booked = await fetchBookedSlots(initialDate, apt.doctorId || apt.doctor_id);
+    
+    // Pick first unbooked slot
+    const requestedSlot = apt.time || '10:00 AM – 11:00 AM';
+    const matchingSlot = TWENTY_FOUR_HOURLY_SLOTS.find(s => s === requestedSlot || s.startsWith(requestedSlot));
+    if (matchingSlot && !booked.includes(matchingSlot)) {
+      setScheduledTime(matchingSlot);
+    } else {
+      const firstAvailable = TWENTY_FOUR_HOURLY_SLOTS.find(s => !booked.includes(s));
+      setScheduledTime(firstAvailable || TWENTY_FOUR_HOURLY_SLOTS[9]);
+    }
     setAcceptModalOpen(true);
+  };
+
+  const handleDateChange = async (newDate) => {
+    setScheduledDate(newDate);
+    const booked = await fetchBookedSlots(newDate, acceptingApt?.doctorId || acceptingApt?.doctor_id);
+    if (booked.includes(scheduledTime)) {
+      const firstAvailable = TWENTY_FOUR_HOURLY_SLOTS.find(s => !booked.includes(s));
+      if (firstAvailable) setScheduledTime(firstAvailable);
+    }
   };
 
   const handleConfirmAccept = async (e) => {
@@ -529,27 +608,31 @@ export default function DoctorDashboard() {
               type="date"
               required
               value={scheduledDate}
-              onChange={(e) => setScheduledDate(e.target.value)}
+              onChange={(e) => handleDateChange(e.target.value)}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-xs"
             />
           </div>
 
           <div>
-            <label className="block font-medium text-slate-700 mb-1">Start Time Slot (60-minute duration)</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block font-medium text-slate-700">24-Hour Consultation Time Slot (60-minute duration)</label>
+              <span className="text-[11px] text-teal-700 font-semibold bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                24 slots available / day
+              </span>
+            </div>
             <select
               value={scheduledTime}
               onChange={(e) => setScheduledTime(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-xs"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-xs font-mono"
             >
-              <option value="09:00 AM">09:00 AM (09:00 AM - 10:00 AM)</option>
-              <option value="10:00 AM">10:00 AM (10:00 AM - 11:00 AM)</option>
-              <option value="11:00 AM">11:00 AM (11:00 AM - 12:00 PM)</option>
-              <option value="12:00 PM">12:00 PM (12:00 PM - 01:00 PM)</option>
-              <option value="02:00 PM">02:00 PM (02:00 PM - 03:00 PM)</option>
-              <option value="03:00 PM">03:00 PM (03:00 PM - 04:00 PM)</option>
-              <option value="04:00 PM">04:00 PM (04:00 PM - 05:00 PM)</option>
-              <option value="05:00 PM">05:00 PM (05:00 PM - 06:00 PM)</option>
-              <option value="06:00 PM">06:00 PM (06:00 PM - 07:00 PM)</option>
+              {TWENTY_FOUR_HOURLY_SLOTS.map((slot, index) => {
+                const booked = isSlotBooked(slot);
+                return (
+                  <option key={slot} value={slot} disabled={booked} className={booked ? 'text-slate-400 bg-slate-100' : 'text-slate-900 font-medium'}>
+                    Slot {String(index + 1).padStart(2, '0')}: {slot} {booked ? '— [Already Booked]' : '— [Available - 60 min]'}
+                  </option>
+                );
+              })}
             </select>
           </div>
 

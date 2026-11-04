@@ -587,7 +587,11 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
   if (isPdf && PDFParse) {
     try {
       const parser = new PDFParse({ data: fileBuffer });
-      const data = await parser.getText();
+      const getTextWithTimeout = Promise.race([
+        parser.getText(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('PDFParse getText timed out')), 5000))
+      ]);
+      const data = await getTextWithTimeout;
       const extracted = data && data.text ? data.text.trim() : "";
 
       // If digital PDF yielded meaningful text (>= 40 chars with words), return it
@@ -684,7 +688,7 @@ async function extractTextWithGeminiVision(apiKey, bufferOrDataUrl, mimeType) {
       base64Data = bufferOrDataUrl.toString('base64');
     }
 
-    const response = await ai.models.generateContent({
+    const generatePromise = ai.models.generateContent({
       model: 'gemini-2.0-flash',
       contents: [
         "Extract all medical test names, patient values, measurement units, and reference intervals verbatim from this diagnostic laboratory report. Keep table rows intact.",
@@ -696,6 +700,8 @@ async function extractTextWithGeminiVision(apiKey, bufferOrDataUrl, mimeType) {
         }
       ]
     });
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Gemini OCR timed out after 8000ms')), 8000));
+    const response = await Promise.race([generatePromise, timeoutPromise]);
     return response?.text?.trim() || '';
   } catch (err) {
     console.warn('[Gemini Vision OCR Helper]', err.message);
@@ -727,8 +733,12 @@ export function extractAndCompareLabEntities(text) {
   }
 
   // 1. Authoritative Clinical Dictionary Matching
+  const cleanSearchText = text
+    .replace(/(?:Test\s*Name|Investigation|Parameter)\s*[:=\-|\t]?\s*/gi, '')
+    .replace(/(?:Value|Result|Observed\s*Value)\s*[:=\-|\t]?\s*/gi, '');
+
   for (const dict of CLINICAL_LAB_TEST_DICTIONARY) {
-    const match = text.match(dict.regex);
+    const match = text.match(dict.regex) || cleanSearchText.match(dict.regex);
     if (match) {
       let rawVal = match[1].replace(/,/g, '');
       let numVal = parseFloat(rawVal);

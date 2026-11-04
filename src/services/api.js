@@ -680,6 +680,14 @@ export const appointmentService = {
     return res.data;
   },
 
+  async getBookedSlots(date, doctorId) {
+    const params = {};
+    if (date) params.date = date;
+    if (doctorId) params.doctor_id = doctorId;
+    const res = await api.get('/doctor/booked-slots', { params });
+    return res.data;
+  },
+
   async acceptAppointment(id, schedule = {}) {
     const res = await api.patch(`/appointments/${id}/accept`, schedule);
     return res.data;
