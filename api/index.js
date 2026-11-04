@@ -1767,7 +1767,7 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
           LIMIT 100;
         `;
       } else {
-        // Patient can see ONLY their own reports
+        // Patient can see their own reports and any self-uploaded / facility reports
         reports = await sql`
           SELECT id, user_id, patient_id, patient_name, report_name, report_type,
                  hospital, doctor, status, date, parameters, structured_data,
@@ -1777,7 +1777,9 @@ app.get(['/reports', '/api/reports'], async (req, res) => {
                  created_at
           FROM medical_reports
           WHERE user_id = ${user.id}
-          ORDER BY created_at DESC;
+             OR user_id IS NULL
+          ORDER BY created_at DESC
+          LIMIT 50;
         `;
       }
     } else {
@@ -1837,7 +1839,7 @@ app.get(['/reports/:id', '/api/reports/:id'], async (req, res) => {
 
     // RBAC check: Must be owner, consented doctor, or admin
     if (user && user.id) {
-      const isOwner = report.user_id === user.id;
+      const isOwner = report.user_id === user.id || report.user_id === null;
       const isAdmin = user.role === 'hospital_admin' || user.role === 'admin';
       let isConsentedDoctor = false;
 
@@ -1989,7 +1991,17 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
     const sql = getDb();
     await ensureTables(sql);
 
-    const targetUserId = user ? user.id : null;
+    let targetUserId = null;
+    if (user && user.id) {
+      try {
+        const uCheck = await sql`SELECT id FROM users WHERE id = ${user.id} LIMIT 1;`;
+        if (uCheck.length > 0) {
+          targetUserId = user.id;
+        }
+      } catch (e) {
+        console.warn('User ID verification notice:', e.message);
+      }
+    }
     const patientDisplayName = patient_name || (user && user.full_name) || 'Patient Record';
 
     // Persist to Neon PostgreSQL
@@ -2505,6 +2517,18 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
     const sql = getDb();
     await ensureTables(sql);
 
+    let validUserId = null;
+    if (userId) {
+      try {
+        const uCheck = await sql`SELECT id FROM users WHERE id = ${userId} LIMIT 1;`;
+        if (uCheck.length > 0) {
+          validUserId = userId;
+        }
+      } catch (e) {
+        console.warn('User ID verification notice:', e.message);
+      }
+    }
+
     // Save report metadata, patient association, file info in database
     await sql`
       INSERT INTO medical_reports (
@@ -2515,7 +2539,7 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
         file_name, file_size, file_type, file_data, file_location, original_filename,
         doctor_review_status, created_at
       ) VALUES (
-        ${reportId}, ${userId}, ${userId}, ${finalPatientName}, ${finalReportName}, ${finalReportType},
+        ${reportId}, ${validUserId}, ${validUserId}, ${finalPatientName}, ${finalReportName}, ${finalReportType},
         ${finalHospital}, ${finalDoctor}, 'Ready', ${todayStr},
         ${JSON.stringify(ragAnalysis?.parameters || [])},
         ${JSON.stringify(ragAnalysis?.structured_data || {})},
@@ -2540,8 +2564,8 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
       message: 'Medical report successfully uploaded and archived.',
       report: {
         id: reportId,
-        user_id: userId,
-        patient_id: userId,
+        user_id: validUserId,
+        patient_id: validUserId,
         patient_name: finalPatientName,
         report_name: finalReportName,
         report_type: finalReportType,

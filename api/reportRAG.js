@@ -631,6 +631,19 @@ export async function extractTextFromDocument(fileBuffer, mimeType, filename) {
     }
   }
 
+  // 1.B Direct Gemini PDF OCR for complex or scanned PDF documents
+  if (isPdf && geminiApiKey) {
+    try {
+      console.log('[Gemini Vision] Attempting direct PDF OCR extraction on document buffer...');
+      const geminiText = await extractTextWithGeminiVision(geminiApiKey, fileBuffer, 'application/pdf');
+      if (geminiText && geminiText.length > 20) {
+        return cleanDocumentText(geminiText);
+      }
+    } catch (geminiPdfErr) {
+      console.warn('[Gemini Vision] Direct PDF OCR notice:', geminiPdfErr.message);
+    }
+  }
+
   // 2. Image document extraction (PNG, JPG, JPEG, WEBP)
   if (isImage) {
     console.log('[OCR] Processing uploaded medical report image via OCR...');
@@ -809,8 +822,9 @@ export function extractAndCompareLabEntities(text) {
     }
 
     // Match patterns like:
-    // [Test Name] [:|=|\t| ] [Number] [Unit] [Range: Min - Max or < Max or > Min] [Flag]
-    const rowMatch = line.match(/^([A-Za-z0-9\s()\/.\-_+]+?)\s*[:|=|\t|]\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*([A-Za-z\/%^0-9]+)?\s*(?:\(?\s*(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*\)?|[<>]\s*(\d+(?:\.\d+)?))?\s*([A-Za-z*]+)?$/i)
+    // [Test Name] [:|=|\t|.|-] [Number] [Unit] [Range: Min - Max or < Max or > Min] [Flag]
+    const rowMatch = line.match(/^([A-Za-z0-9\s()\/._+]{3,40}?)(?:\s*[:|=|\t.\-]+\s*|\s{2,})(\d+(?:,\d+)?(?:\.\d+)?)\s*([A-Za-z\/%^0-9]+)?(?:\s+(?:\(?\s*(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*\)?|[<>]\s*(\d+(?:\.\d+)?)))?\s*([A-Za-z*]+)?$/i)
+      || line.match(/^([A-Za-z0-9\s()\/.\-_+]+?)\s*[:|=|\t|]\s*(\d+(?:,\d+)?(?:\.\d+)?)\s*([A-Za-z\/%^0-9]+)?\s*(?:\(?\s*(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)\s*\)?|[<>]\s*(\d+(?:\.\d+)?))?\s*([A-Za-z*]+)?$/i)
       || line.match(/^([A-Za-z0-9\s()\/.\-_+]{3,35})\s+(\d+(?:,\d+)?(?:\.\d+)?)\s+([A-Za-z\/%^0-9]+)?\s+(?:(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)|[<>]\s*(\d+(?:\.\d+)?))\s*([A-Za-z*]+)?$/i);
 
     if (rowMatch) {
