@@ -2534,6 +2534,54 @@ app.get(['/medicines/:id/knowledge', '/api/medicines/:id/knowledge'], async (req
     }
 
     if (!rawMed) {
+      try {
+        const sql = getDb();
+        const dbRows = await sql`
+          SELECT * FROM medicines 
+          WHERE id = ${id} 
+             OR LOWER(id) = ${targetId} 
+             OR LOWER(brand_name) = ${targetId}
+          LIMIT 1;
+        `;
+        if (dbRows.length > 0) {
+          const row = dbRows[0];
+          rawMed = {
+            id: row.id,
+            brand_name: row.brand_name,
+            name: row.brand_name,
+            generic_name: row.generic_name,
+            active_ingredient: row.active_ingredient || row.composition,
+            active_ingredients: row.active_ingredient ? [row.active_ingredient] : [row.generic_name],
+            composition: row.composition,
+            category: row.therapeutic_category,
+            therapeutic_category: row.therapeutic_category,
+            drug_classification: row.therapeutic_category,
+            dosage_form: row.dosage_form || 'Tablet',
+            available_strengths: row.available_strengths || ['250 mg', '500 mg'],
+            dosage_forms: row.dosage_forms || [row.dosage_form || 'Tablet'],
+            approved_indications: row.approved_indications ? (Array.isArray(row.approved_indications) ? row.approved_indications : [row.approved_indications]) : [],
+            uses: row.approved_indications,
+            reference_dosage: row.reference_dosage,
+            common_side_effects: row.common_side_effects || [],
+            serious_adverse_effects: row.serious_adverse_effects || [],
+            contraindications: row.contraindications || [],
+            drug_interactions: row.drug_interactions || [],
+            route_of_administration: row.route_of_administration || 'Oral',
+            prescription_required: Boolean(row.prescription_required),
+            schedule: row.schedule || 'Schedule H',
+            manufacturer: row.manufacturer,
+            price: row.price,
+            pack_size: row.pack_size,
+            source_reference: row.source_reference,
+            verification_date: row.verification_date,
+          };
+        }
+      } catch (dbErr) {
+        console.warn('DB lookup for medicine knowledge fallback:', dbErr.message);
+      }
+    }
+
+    if (!rawMed) {
       return res.status(404).json({ detail: `Medicine not found for identifier: ${id}` });
     }
 
@@ -6180,18 +6228,81 @@ app.get(['/medicines/compare', '/api/medicines/compare'], (req, res) => {
   return res.json(matched);
 });
 
-app.get(['/medicines/:id', '/api/medicines/:id'], (req, res) => {
-  const { id } = req.params;
-  const lang = req.query.lang || req.query.language || 'en';
-  const target = String(id).toLowerCase().trim();
-  let med = CLINICAL_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
-  if (!med) {
-    med = EXPANDED_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
+app.get(['/medicines/:id', '/api/medicines/:id'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const lang = req.query.lang || req.query.language || 'en';
+    const target = String(id).toLowerCase().trim();
+    
+    let med = EXPANDED_MEDICINES.find((m) => {
+      const mId = String(m.id).toLowerCase();
+      const numPart = mId.replace(/[^0-9]/g, '');
+      const targetNum = target.replace(/[^0-9]/g, '');
+      return mId === target ||
+             (numPart && targetNum && numPart === targetNum) ||
+             (m.brand_name && m.brand_name.toLowerCase().replace(/[^a-z0-9]/g, '-') === target);
+    });
+
+    if (!med) {
+      med = CLINICAL_MEDICINES.find((m) => String(m.id).toLowerCase() === target || (m.brand_name && m.brand_name.toLowerCase() === target));
+    }
+
+    if (!med) {
+      try {
+        const sql = getDb();
+        const dbRows = await sql`
+          SELECT * FROM medicines 
+          WHERE id = ${id} 
+             OR LOWER(id) = ${target} 
+             OR LOWER(brand_name) = ${target}
+          LIMIT 1;
+        `;
+        if (dbRows.length > 0) {
+          const row = dbRows[0];
+          med = {
+            id: row.id,
+            brand_name: row.brand_name,
+            name: row.brand_name,
+            generic_name: row.generic_name,
+            active_ingredient: row.active_ingredient || row.composition,
+            active_ingredients: row.active_ingredient ? [row.active_ingredient] : [row.generic_name],
+            composition: row.composition,
+            category: row.therapeutic_category,
+            therapeutic_category: row.therapeutic_category,
+            drug_classification: row.therapeutic_category,
+            dosage_form: row.dosage_form || 'Tablet',
+            available_strengths: row.available_strengths || ['250 mg', '500 mg'],
+            dosage_forms: row.dosage_forms || [row.dosage_form || 'Tablet'],
+            approved_indications: row.approved_indications ? (Array.isArray(row.approved_indications) ? row.approved_indications : [row.approved_indications]) : [],
+            uses: row.approved_indications,
+            reference_dosage: row.reference_dosage,
+            common_side_effects: row.common_side_effects || [],
+            serious_adverse_effects: row.serious_adverse_effects || [],
+            contraindications: row.contraindications || [],
+            drug_interactions: row.drug_interactions || [],
+            route_of_administration: row.route_of_administration || 'Oral',
+            prescription_required: Boolean(row.prescription_required),
+            schedule: row.schedule || 'Schedule H',
+            manufacturer: row.manufacturer,
+            price: row.price,
+            pack_size: row.pack_size,
+            source_reference: row.source_reference,
+            verification_date: row.verification_date,
+          };
+        }
+      } catch (dbErr) {
+        console.warn('DB lookup for medicine fallback:', dbErr.message);
+      }
+    }
+
+    if (!med) {
+      return res.status(404).json({ detail: `Medicine '${id}' not found in clinical database.` });
+    }
+    return res.json(enrichMedicineKnowledge(med, lang));
+  } catch (err) {
+    console.error('Error fetching medicine details:', err);
+    return res.status(500).json({ detail: `Error loading medicine details: ${err.message}` });
   }
-  if (!med) {
-    return res.status(404).json({ detail: `Medicine '${id}' not found in clinical database.` });
-  }
-  return res.json(enrichMedicineKnowledge(med, lang));
 });
 
 app.get(['/medicines/:id/safety', '/api/medicines/:id/safety'], (req, res) => {

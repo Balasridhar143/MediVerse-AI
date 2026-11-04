@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Pill,
   Search,
@@ -31,6 +32,14 @@ import UniversalLanguageSelector from '../../components/LanguageSelector';
 import api from '../../services/api';
 
 export default function MedicineKnowledgeBase() {
+  const navigate = useNavigate();
+
+  const handleViewMedicineDetails = (med) => {
+    if (!med || !med.id) return;
+    navigate(`/patient/medicine-knowledge/${encodeURIComponent(med.id)}`, {
+      state: { medicine: med }
+    });
+  };
   const [selectedLanguage, setSelectedLanguage] = useState(() => {
     return localStorage.getItem('mediverse_patient_language') || 'en';
   });
@@ -262,7 +271,8 @@ export default function MedicineKnowledgeBase() {
           {medicines.map((med) => (
             <div
               key={med.id}
-              className="bg-white border border-slate-200 rounded-xl p-4.5 hover:shadow-md transition-shadow flex flex-col justify-between"
+              onClick={() => handleViewMedicineDetails(med)}
+              className="bg-white border border-slate-200 rounded-xl p-4.5 hover:shadow-md hover:border-teal-400 transition-all flex flex-col justify-between cursor-pointer"
             >
               <div className="space-y-2.5">
                 {/* Header badges */}
@@ -325,10 +335,13 @@ export default function MedicineKnowledgeBase() {
                   variant="outline"
                   size="sm"
                   icon={BookOpen}
-                  onClick={() => openMonograph(med)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleViewMedicineDetails(med);
+                  }}
                   className="w-full text-xs font-bold justify-center"
                 >
-                  View Clinical Monograph
+                  View Medicine Details
                 </Button>
               </div>
             </div>

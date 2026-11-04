@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import api, { medicineService } from '../services/api';
 import Card from './Card';
 import Button from './Button';
@@ -659,6 +660,16 @@ export default function MedicineDatabaseViewer({ language: propLanguage, onLangu
               <span>
                 <strong>Source:</strong> {selectedMed.source || selectedMed.medical_source || 'CDSCO / Indian Pharmacopoeia / WHO EML'} ({selectedMed.last_verification_date || '2026'})
               </span>
+            </div>
+            {/* Open Full Monograph Link */}
+            <div className="pt-3 border-t border-slate-200 flex justify-end">
+              <Link
+                to={`/patient/medicine-knowledge/${encodeURIComponent(selectedMed.id)}`}
+                className="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-colors"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Open Dedicated Medicine Page</span>
+              </Link>
             </div>
           </div>
         </Modal>
