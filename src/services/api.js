@@ -38,7 +38,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 15000,
+  timeout: 60000, // 60s default timeout for standard clinical API calls
 });
 
 // Request interceptor: dynamically updates baseURL and attaches authentication tokens

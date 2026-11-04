@@ -17,12 +17,13 @@ data/processed/*
 data/logs/*
 backend/uploads/*
 !backend/uploads/.gitkeep
+uploads/reports/*
+!uploads/reports/.gitkeep
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
-
 
 .vercel
 .env*

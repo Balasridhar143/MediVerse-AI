@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
+import multer from 'multer';
 import { neon } from '@neondatabase/serverless';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
@@ -67,7 +68,60 @@ app.use(cors({
 }));
 app.options('*', cors());
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Storage configuration for uploaded medical reports (PDF, JPG, JPEG, PNG up to 15MB)
+const uploadDir = path.resolve('uploads/reports');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const reportStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const uniqueSuffix = `${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    cb(null, `report_${uniqueSuffix}${ext}`);
+  }
+});
+
+const reportFileFilter = (req, file, cb) => {
+  const allowedExts = ['.pdf', '.jpg', '.jpeg', '.png'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedMimes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+  if (allowedExts.includes(ext) || allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file format. Only PDF, JPG, JPEG, and PNG files up to 15MB are accepted.'), false);
+  }
+};
+
+const uploadReportMiddleware = multer({
+  storage: reportStorage,
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
+  fileFilter: reportFileFilter
+});
+
+// Middleware that conditionally applies multer if multipart/form-data
+const conditionalMulter = (req, res, next) => {
+  const contentType = req.headers['content-type'] || '';
+  if (contentType.includes('multipart/form-data')) {
+    uploadReportMiddleware.single('file')(req, res, (err) => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({ detail: 'File size exceeds the 15MB limit. Please upload a smaller file.' });
+        }
+        return res.status(400).json({ detail: err.message || 'File upload validation failed.' });
+      }
+      next();
+    });
+  } else {
+    next();
+  }
+};
 
 // Database connection
 const getDb = () => {
@@ -450,6 +504,9 @@ async function ensureTables(sql) {
         END IF;
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='doctor_notes') THEN
           ALTER TABLE medical_reports ADD COLUMN doctor_notes TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='medical_reports' AND column_name='file_location') THEN
+          ALTER TABLE medical_reports ADD COLUMN file_location TEXT;
         END IF;
       END $$;
     `;
@@ -1859,7 +1916,7 @@ app.delete(['/reports/:id', '/api/reports/:id'], async (req, res) => {
 });
 
 // End-to-End AI Medical Report RAG Analysis Pipeline
-app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
+app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async (req, res) => {
   try {
     let user = null;
     const authHeader = req.headers['authorization'];
@@ -1871,7 +1928,8 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
       } catch (e) {}
     }
 
-    const {
+    const file = req.file;
+    let {
       file_data,
       file_name = 'Diagnostic_Report.pdf',
       file_type = 'application/pdf',
@@ -1886,17 +1944,32 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
       lang
     } = req.body;
 
-    const targetLang = lang || language || 'en';
-
+    let fileLocation = null;
     let fileBuffer = null;
-    if (file_data) {
+
+    if (file) {
+      file_name = file.originalname;
+      file_type = file.mimetype;
+      file_size = file.size;
+      fileLocation = file.path;
+      fileBuffer = fs.readFileSync(file.path);
+      file_data = `data:${file.mimetype};base64,${fileBuffer.toString('base64')}`;
+    } else if (file_data) {
       try {
         const base64Data = file_data.replace(/^data:[^;]+;base64,/, '');
         fileBuffer = Buffer.from(base64Data, 'base64');
+        file_size = fileBuffer.length;
+        // Also persist to disk for storage architecture consistency
+        const ext = path.extname(file_name).toLowerCase() || '.pdf';
+        const diskName = `report_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
+        fileLocation = path.join(uploadDir, diskName);
+        fs.writeFileSync(fileLocation, fileBuffer);
       } catch (e) {
         console.warn('Failed to parse base64 file data:', e.message);
       }
     }
+
+    const targetLang = lang || language || 'en';
 
     // Execute End-to-End RAG Analysis with Language Support
     const ragAnalysis = await executeMedicalReportRAGPipeline({
@@ -1921,13 +1994,13 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
     // Persist to Neon PostgreSQL
     await sql`
       INSERT INTO medical_reports (
-        id, user_id, patient_name, report_name, report_type,
+        id, user_id, patient_id, patient_name, report_name, report_type,
         hospital, doctor, status, date,
         parameters, structured_data, ai_explanation,
         extracted_text, rag_citations, file_name, file_size, file_type,
-        file_data, original_filename, doctor_review_status, created_at
+        file_data, file_location, original_filename, doctor_review_status, created_at
       ) VALUES (
-        ${reportId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
+        ${reportId}, ${targetUserId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
         ${hospital}, ${doctor}, 'Ready', ${todayStr},
         ${JSON.stringify(ragAnalysis.parameters || [])},
         ${JSON.stringify(ragAnalysis.structured_data || {})},
@@ -1938,6 +2011,7 @@ app.post(['/reports/analyze', '/api/reports/analyze'], async (req, res) => {
         ${file_size || (fileBuffer ? fileBuffer.length : 0)},
         ${file_type},
         ${file_data || null},
+        ${fileLocation},
         ${file_name},
         'Pending Review',
         NOW()
@@ -2000,13 +2074,13 @@ app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res)
     await ensureTables(sql);
 
     const rows = await sql`
-      SELECT id, report_name, file_name, file_type, file_data
+      SELECT id, report_name, file_name, file_type, file_data, file_location
       FROM medical_reports
       WHERE id = ${id}
       LIMIT 1;
     `;
 
-    if (rows.length === 0 || !rows[0].file_data) {
+    if (rows.length === 0 || (!rows[0].file_data && !rows[0].file_location)) {
       return res.status(404).json({ detail: 'Document file not found for this medical report.' });
     }
 
@@ -2014,13 +2088,20 @@ app.get(['/reports/:id/download', '/api/reports/:id/download'], async (req, res)
     const mimeType = rep.file_type || 'application/pdf';
     const filename = rep.file_name || `${rep.report_name.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
 
-    const base64Content = rep.file_data.replace(/^data:[^;]+;base64,/, '');
-    const buffer = Buffer.from(base64Content, 'base64');
+    if (rep.file_location && fs.existsSync(rep.file_location)) {
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return fs.createReadStream(rep.file_location).pipe(res);
+    }
 
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', buffer.length);
-    return res.end(buffer);
+    if (rep.file_data) {
+      const base64Content = rep.file_data.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(base64Content, 'base64');
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', buffer.length);
+      return res.end(buffer);
+    }
   } catch (err) {
     console.error('Download report error:', err);
     return res.status(500).json({ detail: `Failed to download document: ${err.message}` });
@@ -2135,57 +2216,165 @@ app.post(['/reports/:id/review', '/api/reports/:id/review'], authenticateToken, 
   }
 });
 
-// Standard report upload route (backward compatibility)
-app.post(['/reports/upload', '/api/reports/upload'], async (req, res) => {
+// Production report upload route with multipart/form-data & JSON support
+app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (req, res) => {
   try {
     let userId = null;
+    let patientDisplayName = 'Patient Record';
     const authHeader = req.headers['authorization'];
     if (authHeader) {
       try {
         const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
         userId = decoded.sub || decoded.id;
+        if (decoded.full_name) patientDisplayName = decoded.full_name;
       } catch (e) {}
     }
 
+    const file = req.file;
     const {
-      report_name,
-      report_type = 'Blood Tests',
-      hospital = 'City Care Diagnostics',
-      doctor = 'Dr. Arun Kumar',
-      parameters = [],
-      structured_data = {},
-      ai_explanation = {},
-      patient_name,
+      report_name, reportName,
+      report_type, reportType, category,
+      hospital,
+      doctor,
+      patient_name, patientName,
+      date, upload_date,
+      file_data, file_name, file_type, file_size
     } = req.body;
 
-    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const finalReportName = (report_name || reportName || (file ? file.originalname.replace(/\.[^/.]+$/, '') : file_name?.replace(/\.[^/.]+$/, '') || 'Medical Laboratory Report')).trim();
+    const finalReportType = report_type || reportType || category || 'Blood Tests';
+    const finalHospital = (hospital || 'City Diagnostic Center').trim();
+    const finalDoctor = (doctor || 'Dr. Arun Kumar').trim();
+    const finalPatientName = patient_name || patientName || patientDisplayName;
+    const todayStr = date || upload_date || new Date().toISOString().split('T')[0];
 
+    let actualFileBuffer = null;
+    let finalFileName = file_name || 'report.pdf';
+    let finalFileType = file_type || 'application/pdf';
+    let finalFileSize = parseInt(file_size, 10) || 0;
+    let finalFileData = file_data || null;
+    let finalFileLocation = null;
+
+    if (file) {
+      finalFileName = file.originalname;
+      finalFileType = file.mimetype;
+      finalFileSize = file.size;
+      finalFileLocation = file.path;
+      actualFileBuffer = fs.readFileSync(file.path);
+      finalFileData = `data:${file.mimetype};base64,${actualFileBuffer.toString('base64')}`;
+    } else if (file_data) {
+      try {
+        const base64Data = file_data.replace(/^data:[^;]+;base64,/, '');
+        actualFileBuffer = Buffer.from(base64Data, 'base64');
+        finalFileSize = actualFileBuffer.length;
+        // Also persist to disk for storage architecture consistency
+        const ext = path.extname(finalFileName).toLowerCase() || '.pdf';
+        const diskName = `report_${Date.now()}_${crypto.randomBytes(4).toString('hex')}${ext}`;
+        finalFileLocation = path.join(uploadDir, diskName);
+        fs.writeFileSync(finalFileLocation, actualFileBuffer);
+      } catch (e) {
+        console.warn('Failed to parse base64 file data:', e.message);
+      }
+    }
+
+    if (!file && !actualFileBuffer) {
+      return res.status(400).json({ detail: 'Medical report file (PDF, JPG, JPEG, or PNG) is required.' });
+    }
+
+    // Validate 15MB limit
+    if (finalFileSize > 15 * 1024 * 1024) {
+      return res.status(400).json({ detail: 'File size exceeds the 15MB limit. Please upload a smaller document.' });
+    }
+
+    // Validate supported formats
+    const ext = path.extname(finalFileName).toLowerCase();
+    const validExtensions = ['.pdf', '.jpg', '.jpeg', '.png'];
+    if (!validExtensions.includes(ext) && !finalFileType.includes('pdf') && !finalFileType.includes('image')) {
+      return res.status(400).json({ detail: 'Invalid file format. Supported formats: PDF, JPG, JPEG, PNG.' });
+    }
+
+    // Run clinical document extraction and entity comparison
+    let ragAnalysis = null;
+    if (actualFileBuffer) {
+      try {
+        ragAnalysis = await executeMedicalReportRAGPipeline({
+          fileBuffer: actualFileBuffer,
+          fileName: finalFileName,
+          mimeType: finalFileType,
+          patientName: finalPatientName,
+          reportType: finalReportType,
+          hospital: finalHospital,
+          language: 'en'
+        });
+      } catch (parseErr) {
+        console.warn('[Report Upload Pipeline Warning]', parseErr.message);
+      }
+    }
+
+    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
     const sql = getDb();
     await ensureTables(sql);
 
+    // Save report metadata, patient association, file info in database
     await sql`
       INSERT INTO medical_reports (
-        id, user_id, patient_name, report_name, report_type, hospital, doctor, status, date, parameters, structured_data, ai_explanation, created_at
+        id, user_id, patient_id, patient_name, report_name, report_type,
+        hospital, doctor, status, date,
+        parameters, structured_data, ai_explanation,
+        extracted_text, rag_citations,
+        file_name, file_size, file_type, file_data, file_location, original_filename,
+        doctor_review_status, created_at
       ) VALUES (
-        ${reportId}, ${userId}, ${patient_name || 'Patient Record'}, ${report_name || 'Medical Laboratory Report'}, ${report_type}, ${hospital}, ${doctor}, 'Ready', ${todayStr}, ${JSON.stringify(parameters)}, ${JSON.stringify(structured_data)}, ${JSON.stringify(ai_explanation)}, NOW()
+        ${reportId}, ${userId}, ${userId}, ${finalPatientName}, ${finalReportName}, ${finalReportType},
+        ${finalHospital}, ${finalDoctor}, 'Ready', ${todayStr},
+        ${JSON.stringify(ragAnalysis?.parameters || [])},
+        ${JSON.stringify(ragAnalysis?.structured_data || {})},
+        ${JSON.stringify(ragAnalysis?.ai_explanation || {})},
+        ${ragAnalysis?.extracted_text || ''},
+        ${JSON.stringify(ragAnalysis?.rag_citations || [])},
+        ${finalFileName},
+        ${finalFileSize},
+        ${finalFileType},
+        ${finalFileData},
+        ${finalFileLocation},
+        ${finalFileName},
+        'Pending Review',
+        NOW()
       );
     `;
 
     return res.status(201).json({
+      success: true,
+      report_id: reportId,
       id: reportId,
-      user_id: userId,
-      report_name: report_name || 'Medical Laboratory Report',
-      report_type,
-      hospital,
-      doctor,
-      status: 'Ready',
-      date: todayStr,
-      parameters,
-      structured_data,
-      ai_explanation,
+      message: 'Medical report successfully uploaded and archived.',
+      report: {
+        id: reportId,
+        user_id: userId,
+        patient_id: userId,
+        patient_name: finalPatientName,
+        report_name: finalReportName,
+        report_type: finalReportType,
+        hospital: finalHospital,
+        doctor: finalDoctor,
+        status: 'Ready',
+        date: todayStr,
+        parameters: ragAnalysis?.parameters || [],
+        structured_data: ragAnalysis?.structured_data || {},
+        ai_explanation: ragAnalysis?.ai_explanation || {},
+        rag_citations: ragAnalysis?.rag_citations || [],
+        file_name: finalFileName,
+        file_size: finalFileSize,
+        file_type: finalFileType,
+        file_data: finalFileData,
+        file_location: finalFileLocation,
+        doctor_review_status: 'Pending Review',
+        created_at: new Date().toISOString()
+      },
+      rag_analysis: ragAnalysis
     });
   } catch (err) {
+    console.error('Report upload failed:', err);
     return res.status(500).json({ detail: `Report upload failed: ${err.message}` });
   }
 });
@@ -4367,7 +4556,7 @@ function clearAdminFailures(key) {
 
 // Hospital Context Resolution Helper
 async function resolveHospitalContext(req, sql) {
-  let requestedHospitalId = req.query.hospital_id || req.query.hospitalId || req.headers['x-hospital-id'];
+  let requestedHospitalId = req.query.hospital_id || req.query.hospitalId || req.headers['x-hospital-id'] || (req.user && req.user.hospital_id);
   const user = req.user;
 
   if (user && (user.role === 'hospital_admin' || user.role === 'admin')) {
@@ -4376,6 +4565,7 @@ async function resolveHospitalContext(req, sql) {
       FROM hospitals h
       WHERE h.admin_user_id = ${user.id}
          OR h.id = (SELECT hospital_id FROM users WHERE id = ${user.id})
+         OR (h.id = ${user.hospital_id || ''} AND ${Boolean(user.hospital_id)})
       UNION
       SELECT COALESCE(h2.id, ha.facility_id) as id, ha.hospital_name as name, ha.facility_id
       FROM hospital_admins ha
@@ -4394,6 +4584,8 @@ async function resolveHospitalContext(req, sql) {
       } else if (!requestedHospitalId) {
         requestedHospitalId = adminHospitals[0].id;
       }
+    } else if (user.hospital_id) {
+      requestedHospitalId = user.hospital_id;
     }
   } else if (user && user.role === 'doctor') {
     const docRows = await sql`SELECT id FROM doctors WHERE user_id = ${user.id} OR id = ${user.id} LIMIT 1;`;

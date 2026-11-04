@@ -128,6 +128,43 @@ export const reportService = {
   },
 
   /**
+   * POST /api/reports/upload
+   * Dedicated multipart/form-data report upload route with storage & extraction
+   */
+  async uploadReport({ file, reportName, reportType, hospital, doctor, patientName, onUploadProgress }) {
+    const formData = new FormData();
+    if (file) {
+      formData.append('file', file);
+    }
+    formData.append('report_name', reportName || file?.name?.replace(/\.[^/.]+$/, '') || 'Medical Laboratory Report');
+    formData.append('report_type', reportType || 'Blood Tests');
+    formData.append('hospital', hospital || 'City Diagnostic Center');
+    formData.append('doctor', doctor || 'Dr. Arun Kumar');
+    if (patientName) formData.append('patient_name', patientName);
+
+    const res = await api.post('/reports/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      timeout: 120000, // 2 minutes for upload and extraction
+      onUploadProgress: (progressEvent) => {
+        if (onUploadProgress && progressEvent.total) {
+          const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onUploadProgress(percent);
+        }
+      }
+    });
+
+    const repData = res.data.report || res.data;
+    return {
+      success: true,
+      reportId: res.data.report_id || repData?.id,
+      report: normalizeDbReport(repData),
+      ragAnalysis: res.data.rag_analysis
+    };
+  },
+
+  /**
    * POST /api/reports/analyze
    * Full clinical RAG analysis pipeline with optional Indian language selection
    */
@@ -161,7 +198,9 @@ export const reportService = {
       payload.file_type = fileType || 'application/pdf';
     }
 
-    const res = await api.post('/reports/analyze', payload);
+    const res = await api.post('/reports/analyze', payload, {
+      timeout: 120000 // 2 minutes for comprehensive OCR, RAG retrieval & LLM synthesis
+    });
     return {
       success: true,
       reportId: res.data.report_id,
@@ -175,7 +214,9 @@ export const reportService = {
    * Translates or re-runs analysis on an existing uploaded report in the selected language
    */
   async reanalyzeReport(id, language = 'en') {
-    const res = await api.post(`/reports/${id}/reanalyze`, { language });
+    const res = await api.post(`/reports/${id}/reanalyze`, { language }, {
+      timeout: 120000
+    });
     return res.data;
   },
 
