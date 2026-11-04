@@ -88,15 +88,44 @@ export default function ReportReader({
     if (activeReport?.id) {
       setReanalyzing(true);
       try {
-        const updated = await reportService.reanalyzeReport(activeReport.id, newLang);
-        if (updated) {
-          setCurrentReport(updated);
+        const res = await reportService.reanalyzeReport(activeReport.id, newLang);
+        if (res?.report) {
+          setCurrentReport(res.report);
+        } else if (res?.rag_analysis) {
+          setCurrentReport((prev) => ({
+            ...prev,
+            parameters: Array.isArray(res.rag_analysis.parameters) ? res.rag_analysis.parameters : prev.parameters,
+            aiExplanation: res.rag_analysis.ai_explanation || prev.aiExplanation,
+            ai_explanation: res.rag_analysis.ai_explanation || prev.ai_explanation,
+            rag_citations: res.rag_analysis.rag_citations || prev.rag_citations
+          }));
         }
       } catch (err) {
         console.warn('Re-analysis in new language failed:', err);
       } finally {
         setReanalyzing(false);
       }
+    }
+  };
+
+  const handleSynthesizeExplanation = async () => {
+    if (!activeReport?.id) return;
+    setReanalyzing(true);
+    try {
+      const res = await reportService.explainReport(activeReport.id, language);
+      if (res?.report) {
+        setCurrentReport(res.report);
+      } else if (res?.explanation) {
+        setCurrentReport((prev) => ({
+          ...prev,
+          aiExplanation: res.explanation,
+          ai_explanation: res.explanation
+        }));
+      }
+    } catch (err) {
+      console.warn('Step 5 explanation synthesis failed:', err);
+    } finally {
+      setReanalyzing(false);
     }
   };
 
@@ -409,6 +438,22 @@ export default function ReportReader({
                 </div>
               )}
 
+              {/* Important Precautions */}
+              {Array.isArray(activeReport.aiExplanation.precautions) && activeReport.aiExplanation.precautions.length > 0 && (
+                <div className="p-3 bg-rose-50/60 border border-rose-200 rounded-xl space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-900 block">
+                    Important Precautions
+                  </span>
+                  <ul className="space-y-1 text-xs text-rose-950 list-disc pl-4">
+                    {activeReport.aiExplanation.precautions.map((pre, idx) => (
+                      <li key={idx} className="leading-snug">
+                        {pre}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {/* RAG Guideline Citations */}
               {Array.isArray(activeReport.rag_citations) && activeReport.rag_citations.length > 0 && (
                 <div className="pt-1 flex items-center gap-1.5 flex-wrap">
@@ -631,13 +676,21 @@ export default function ReportReader({
                 <strong className="text-teal-950 font-bold block text-xs">
                   5. What does each important test measure?
                 </strong>
-                <div className="space-y-1.5 pt-1">
-                  {activeReport.parameters?.map((p) => (
-                    <div key={p.name} className="p-2 bg-white rounded-lg border border-slate-200">
-                      <strong className="text-slate-900">{p.name}: </strong>
-                      <span className="text-slate-700">{p.purpose || p.easyMeaning || p.meaning}</span>
-                    </div>
-                  ))}
+                <div className="space-y-2 pt-1">
+                  {activeReport.parameters?.map((p) => {
+                    const purposeDesc = p.purpose || p.what_it_measures || p.easyMeaning || p.meaning || (p.name ? `Diagnostic biomarker assessing physiological function of ${p.name}.` : 'Clinical laboratory marker.');
+                    return (
+                      <div key={p.name} className="p-2.5 bg-white rounded-lg border border-slate-200 text-xs">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <strong className="text-slate-900 font-bold">{p.name}</strong>
+                          <span className="text-[11px] font-mono font-semibold text-slate-500">
+                            {p.value} {p.unit}
+                          </span>
+                        </div>
+                        <p className="text-slate-700 leading-relaxed">{purposeDesc}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

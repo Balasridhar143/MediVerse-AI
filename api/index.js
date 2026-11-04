@@ -10,7 +10,7 @@ import crypto from 'crypto';
 import { VERIFIED_STATISTICS, LOCATION_REGISTRY, CLINICAL_HOSPITALS as DATASET_HOSPITALS, CLINICAL_MEDICINES as DATASET_MEDICINES } from './datasets.js';
 import { sendOtpEmail } from './email.js';
 import { CLINICAL_DRUG_CLASSES, enrichMedicineKnowledge, MEDICAL_DISCLAIMER } from './medicineKnowledge.js';
-import { executeMedicalReportRAGPipeline, CLINICAL_RAG_KNOWLEDGE_BASE } from './reportRAG.js';
+import { executeMedicalReportRAGPipeline, generateAiPatientFriendlyExplanation, extractAndCompareLabEntities, retrieveRAGKnowledge, CLINICAL_RAG_KNOWLEDGE_BASE } from './reportRAG.js';
 import { validateAppointmentSlot, parseTimeSlotString } from './appointmentSlotValidator.js';
 
 // Load expanded persistent clinical medicines catalog (5,600+ verified CDSCO / WHO / NLEM records)
@@ -2215,19 +2215,155 @@ app.post(['/reports/:id/reanalyze', '/api/reports/:id/reanalyze'], async (req, r
       UPDATE medical_reports
       SET parameters = ${JSON.stringify(ragAnalysis.parameters || [])},
           structured_data = ${JSON.stringify(ragAnalysis.structured_data || {})},
-          ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})}
+          ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+          rag_citations = ${JSON.stringify(ragAnalysis.rag_citations || [])}
       WHERE id = ${id};
+    `;
+
+    const updatedRows = await sql`
+      SELECT id, user_id, patient_id, patient_name, report_name, report_type, hospital, doctor,
+             file_name, file_type, file_data, extracted_text, parameters, structured_data,
+             ai_explanation, rag_citations, created_at, date, status, doctor_review_status, doctor_notes
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
     `;
 
     return res.json({
       success: true,
       report_id: id,
       language: targetLang,
-      rag_analysis: ragAnalysis
+      rag_analysis: ragAnalysis,
+      report: updatedRows[0]
     });
   } catch (err) {
     console.error('Report re-analysis error:', err);
     return res.status(500).json({ detail: `Failed to re-analyze report: ${err.message}` });
+  }
+});
+
+// Step 5 dedicated: Synthesize / Refresh Patient-Friendly Clinical Explanation WITHOUT re-extracting OCR
+app.post(['/reports/:id/explain', '/api/reports/:id/explain'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { language = 'en', lang } = req.body || {};
+    const targetLang = lang || language || 'en';
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, user_id, patient_id, patient_name, report_name, report_type, hospital, doctor,
+             file_name, file_type, parameters, structured_data, ai_explanation,
+             extracted_text, rag_citations, date, status, doctor_review_status, doctor_notes, created_at
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    const rep = rows[0];
+    let testResults = Array.isArray(rep.parameters) && rep.parameters.length > 0
+      ? rep.parameters
+      : extractAndCompareLabEntities(rep.extracted_text || '');
+
+    const ragSources = Array.isArray(rep.rag_citations) && rep.rag_citations.length > 0
+      ? rep.rag_citations
+      : retrieveRAGKnowledge(rep.extracted_text || '', testResults, 3);
+
+    // Generate Step 5 explanation using already extracted parameters without re-running OCR
+    const explanation = await generateAiPatientFriendlyExplanation({
+      testResults,
+      patientName: rep.patient_name || 'Patient',
+      reportType: rep.report_type || 'Blood Tests',
+      hospital: rep.hospital || 'Clinical Laboratory',
+      date: rep.date || (rep.created_at ? rep.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+      extractedText: rep.extracted_text || '',
+      language: targetLang,
+      ragSources
+    });
+
+    const normalCount = testResults.filter(t => t.status === "Normal" || t.flag === "Normal").length;
+    const abnormalCount = testResults.filter(t => t.status !== "Normal" && t.status !== "Unable to determine").length;
+    const criticalCount = testResults.filter(t => t.is_critical).length;
+
+    const updatedStructured = {
+      ...(rep.structured_data || {}),
+      important_findings: explanation.findings_summary || explanation.whatThisMeans,
+      overall_summary: explanation.overall_summary || explanation.simpleExplanation,
+      normal_parameters: normalCount,
+      abnormal_parameters: abnormalCount,
+      critical_parameters: criticalCount,
+      total_tests_analyzed: testResults.length
+    };
+
+    await sql`
+      UPDATE medical_reports
+      SET ai_explanation = ${JSON.stringify(explanation)},
+          parameters = ${JSON.stringify(testResults)},
+          structured_data = ${JSON.stringify(updatedStructured)},
+          rag_citations = ${JSON.stringify(ragSources)}
+      WHERE id = ${id};
+    `;
+
+    const updatedRows = await sql`
+      SELECT id, user_id, patient_id, patient_name, report_name, report_type,
+             hospital, doctor, status, date, parameters, structured_data,
+             ai_explanation, extracted_text, rag_citations, file_name, file_size, file_type,
+             doctor_review_status, doctor_notes, created_at
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    return res.json({
+      success: true,
+      report_id: id,
+      language: targetLang,
+      explanation,
+      ai_explanation: explanation,
+      report: updatedRows[0]
+    });
+  } catch (err) {
+    console.error('Report explanation generation error:', err);
+    return res.status(500).json({ detail: `Failed to generate friendly explanation: ${err.message}` });
+  }
+});
+
+// GET report explanation
+app.get(['/reports/:id/explanation', '/api/reports/:id/explanation'], async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, user_id, patient_name, report_name, report_type, hospital, doctor,
+             parameters, structured_data, ai_explanation, rag_citations, date, created_at
+      FROM medical_reports
+      WHERE id = ${id}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({ detail: 'Medical report not found.' });
+    }
+
+    const rep = rows[0];
+    return res.json({
+      success: true,
+      report_id: id,
+      ai_explanation: rep.ai_explanation || {},
+      explanation: rep.ai_explanation || {},
+      parameters: rep.parameters || [],
+      rag_citations: rep.rag_citations || []
+    });
+  } catch (err) {
+    console.error('Fetch report explanation error:', err);
+    return res.status(500).json({ detail: `Failed to fetch explanation: ${err.message}` });
   }
 });
 

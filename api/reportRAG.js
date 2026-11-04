@@ -955,34 +955,245 @@ export function generateDetailedExplanation({
   ];
 
   // 8. Test Evaluations (Each Test & Its Purpose)
-  const testEvaluations = testResults.map(t => ({
-    test_name: t.test_name,
-    purpose: t.purpose || `Diagnostic assessment of ${t.test_name}.`,
-    observed_value: `${t.patient_value} ${t.unit}`,
-    reference_range: t.reference_range,
-    status: t.status,
-    is_critical: Boolean(t.is_critical),
-    interpretation: `${t.test_name} was recorded at ${t.patient_value} ${t.unit} (reference interval: ${t.reference_range}). Status: ${t.status}.`,
-    possible_significance: t.possible_reasons || 'Aligns with laboratory standard parameters.'
-  }));
+  const testEvaluations = testResults.map(t => {
+    const purposeText = t.purpose || `Diagnostic biomarker assessment of ${t.test_name}.`;
+    const measuresText = t.meaning || t.what_it_measures || purposeText;
+    
+    // Enrich parameter in place so subsequent table renders have complete metadata
+    t.purpose = purposeText;
+    t.what_it_measures = measuresText;
+    t.easyMeaning = purposeText;
+    t.meaning = measuresText;
+
+    return {
+      test_name: t.test_name,
+      purpose: purposeText,
+      what_it_measures: measuresText,
+      observed_value: `${t.patient_value} ${t.unit}`,
+      reference_range: t.reference_range,
+      status: t.status,
+      is_critical: Boolean(t.is_critical),
+      interpretation: `${t.test_name} was recorded at ${t.patient_value} ${t.unit} (reference interval: ${t.reference_range}). Status: ${t.status}.`,
+      possible_significance: t.possible_reasons || 'Aligns with laboratory standard parameters.'
+    };
+  });
 
   const disclaimer = "MEDICAL DECISION SUPPORT DISCLAIMER: This automated AI analysis is generated exclusively for patient health literacy and clinical decision support. It does NOT constitute a definitive medical diagnosis, clinical prognosis, or prescription. All laboratory findings must be reviewed and correlated with physical examination by a qualified, registered medical practitioner.";
 
   return {
     overall_summary: overallSummary,
     summary: overallSummary,
+    simpleExplanation: overallSummary,
     findings_summary: abnormalCount === 0
       ? "All parameters fall within established reference intervals."
       : `${abnormalCount} parameter(s) deviate from standard laboratory bounds (${abnormalItems.map(a => a.test_name).join(', ')}).`,
+    whatThisMeans: possibleSignificance,
     normal_findings: normalFindings,
     abnormal_findings: abnormalFindings,
     possible_significance: possibleSignificance,
     precautions: precautions,
     doctor_discussion_questions: doctorDiscussionQuestions,
+    questionsForDoctor: doctorDiscussionQuestions,
     recommendations: recommendations,
     test_evaluations: testEvaluations,
     disclaimer: disclaimer
   };
+}
+
+/**
+ * Step 5: Synthesize Patient-Friendly Clinical Explanation using Google GenAI (Gemini API)
+ * with robust error handling, controlled retries, and clinical RAG fallback.
+ */
+export async function generateAiPatientFriendlyExplanation({
+  testResults = [],
+  patientName = 'Patient',
+  reportType = 'Blood Tests',
+  hospital = 'Clinical Laboratory',
+  date = new Date().toISOString().split('T')[0],
+  extractedText = '',
+  language = 'en',
+  ragSources = []
+}) {
+  const geminiApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.VITE_GEMINI_API_KEY;
+
+  // 1. Build deterministic grounded baseline first
+  const fallbackExplanation = generateDetailedExplanation({
+    testResults,
+    patientName,
+    reportType,
+    hospital,
+    date
+  });
+
+  if (!geminiApiKey || testResults.length === 0) {
+    console.log('[Step 5 AI Explanation] Using grounded Clinical RAG engine (Gemini key not provided or empty tests)');
+    if (language && language !== 'en') {
+      return translateReportAnalysis({ ai_explanation: fallbackExplanation, parameters: testResults, structured_data: {} }, language).ai_explanation;
+    }
+    return fallbackExplanation;
+  }
+
+  // 2. Format clinical prompt with tests, values, reference intervals, abnormal findings and RAG citations
+  const abnormalTests = testResults.filter(t => t.status !== 'Normal' && t.flag !== 'Normal');
+  const normalTests = testResults.filter(t => t.status === 'Normal' || t.flag === 'Normal');
+
+  const testListPrompt = testResults.map((t, idx) => 
+    `${idx + 1}. ${t.test_name}: Observed ${t.patient_value} ${t.unit} (Reference Range: ${t.reference_range}) -> Status: ${t.status}${t.is_critical ? ' [CRITICAL ALERT]' : ''}`
+  ).join('\n');
+
+  const guidelinesPrompt = (ragSources || []).map(g => 
+    `- ${g.title || g.guideline} (${g.source || 'Medical Guideline'}): ${g.content}`
+  ).join('\n');
+
+  const prompt = `You are MediVerse AI's Senior Clinical Intelligence & Patient Communication Specialist.
+Generate Step 5: Patient-Friendly Clinical Explanation for a patient review.
+
+PATIENT & REPORT DETAILS:
+- Patient Name: ${patientName}
+- Diagnostic Category: ${reportType}
+- Laboratory / Facility: ${hospital}
+- Date: ${date}
+- Target Language: ${language === 'ta' ? 'Tamil' : language === 'hi' ? 'Hindi' : 'English'}
+
+EXTRACTED LABORATORY TESTS & MEASUREMENTS:
+${testListPrompt}
+
+CLINICAL GUIDELINE EVIDENCE (RAG KNOWLEDGE BASE):
+${guidelinesPrompt || 'Standard international clinical laboratory guidelines (WHO, ADA, ICSH, KDIGO).'}
+
+MANDATORY RESPONSE REQUIREMENTS:
+1. Ground every statement strictly in the provided measured values and clinical guidelines. Do not invent unmeasured tests.
+2. Explain what each test is and what it measures in clear, accessible language suitable for a patient without medical training.
+3. For abnormal results, explain possible physiological factors (diet, hydration, mild stress, or health conditions) calmly without panic.
+4. Provide structured, actionable precautions and insightful questions the patient can ask their consulting physician.
+5. Provide practical recommended next steps.
+6. Include a strict clinical safety disclaimer reminding the patient that this is educational decision support and not a substitute for a licensed doctor.
+
+OUTPUT FORMAT:
+Respond ONLY with a valid, parseable JSON object matching this exact structure:
+{
+  "overall_summary": "2-3 comprehensive, encouraging sentences summarizing the overall report findings.",
+  "simpleExplanation": "1-2 concise, plain-language sentences summarizing the core results.",
+  "findings_summary": "Summary of normal vs abnormal parameter counts and key takeaways.",
+  "whatThisMeans": "Everyday language explanation of what these laboratory findings indicate for the patient's health.",
+  "normal_findings": ["List of tests within healthy target bounds and what their normal status signifies."],
+  "abnormal_findings": [
+    {
+      "test_name": "Test Name",
+      "value": "Measured value with unit",
+      "reference_range": "Expected interval",
+      "status": "High or Low status",
+      "significance": "What this deviation might indicate clinically.",
+      "possible_causes": "Common physiological or pathological causes."
+    }
+  ],
+  "possible_significance": "Detailed paragraph exploring the clinical context of deviations, temporary factors (hydration, recent meals), and the importance of doctor evaluation.",
+  "precautions": [
+    "At least 4 actionable patient safety precautions (e.g. do not modify prescribed medications, avoid unverified supplements, maintain hydration, warning signs)."
+  ],
+  "doctor_discussion_questions": [
+    "At least 3-4 specific, high-yield questions for the patient to ask their doctor during their next visit."
+  ],
+  "recommendations": [
+    "At least 3 practical recommended next steps."
+  ],
+  "test_evaluations": [
+    {
+      "test_name": "Test Name",
+      "purpose": "What this test is used for in medicine.",
+      "what_it_measures": "Exactly what biological substance or cell type this measures in the human body.",
+      "observed_value": "Measured value and unit",
+      "reference_range": "Expected normal interval",
+      "status": "Normal / Above / Below",
+      "is_critical": false,
+      "interpretation": "Clear patient-friendly interpretation of this specific number.",
+      "possible_significance": "Healthy target range OR potential clinical factors."
+    }
+  ],
+  "disclaimer": "CLINICAL DECISION SUPPORT DISCLAIMER: This automated AI analysis is generated exclusively for patient health literacy and clinical decision support. It does NOT constitute a definitive medical diagnosis, clinical prognosis, or prescription. All laboratory findings must be reviewed and correlated with physical examination by a qualified, registered medical practitioner."
+}`;
+
+  // 3. Invoke Google GenAI with controlled timeout & 1 retry
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      console.log(`[Step 5 AI Explanation] Generating with Gemini 2.0 Flash (attempt ${attempt}/2)...`);
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+
+      const generatePromise = ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2
+        }
+      });
+
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Gemini explanation synthesis timed out after 12000ms')), 12000)
+      );
+
+      const response = await Promise.race([generatePromise, timeoutPromise]);
+      const rawText = response?.text?.trim() || '';
+
+      if (!rawText) {
+        throw new Error('Empty response received from Gemini model.');
+      }
+
+      // Clean JSON if wrapped in markdown code blocks
+      const cleanJson = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(cleanJson);
+
+      // Validate core required keys
+      if (!parsed.overall_summary && !parsed.summary) {
+        throw new Error('AI response missing overall_summary key.');
+      }
+
+      // Synchronize alias keys for maximum frontend compatibility across both analyzers
+      parsed.summary = parsed.overall_summary || parsed.summary;
+      parsed.simpleExplanation = parsed.simpleExplanation || parsed.overall_summary;
+      parsed.whatThisMeans = parsed.whatThisMeans || parsed.possible_significance || parsed.findings_summary;
+      parsed.questionsForDoctor = parsed.doctor_discussion_questions || parsed.questionsForDoctor || [];
+      parsed.doctor_discussion_questions = parsed.questionsForDoctor;
+      parsed.disclaimer = parsed.disclaimer || fallbackExplanation.disclaimer;
+
+      // Enrich testResults array with detailed purpose & what_it_measures generated by AI
+      if (Array.isArray(parsed.test_evaluations)) {
+        testResults.forEach(param => {
+          const evalMatch = parsed.test_evaluations.find(e => 
+            (e.test_name && param.test_name && e.test_name.toLowerCase() === param.test_name.toLowerCase()) ||
+            (e.test_name && param.name && e.test_name.toLowerCase() === param.name.toLowerCase())
+          );
+          if (evalMatch) {
+            param.purpose = evalMatch.purpose || param.purpose;
+            param.what_it_measures = evalMatch.what_it_measures || evalMatch.purpose || param.meaning;
+            param.easyMeaning = evalMatch.purpose || param.easyMeaning;
+            param.meaning = evalMatch.what_it_measures || param.meaning;
+            param.explanation = evalMatch.interpretation || param.explanation;
+            if (evalMatch.possible_significance) {
+              param.possible_reasons = evalMatch.possible_significance;
+            }
+          }
+        });
+      }
+
+      console.log(`[Step 5 AI Explanation] Gemini generation successful for ${testResults.length} test parameters.`);
+      return parsed;
+    } catch (err) {
+      console.warn(`[Step 5 AI Explanation] Attempt ${attempt} failed:`, err.message);
+      if (attempt === 2) {
+        console.warn('[Step 5 AI Explanation] Falling back to structured clinical RAG engine.');
+        if (language && language !== 'en') {
+          return translateReportAnalysis({ ai_explanation: fallbackExplanation, parameters: testResults, structured_data: {} }, language).ai_explanation;
+        }
+        return fallbackExplanation;
+      }
+      // Small pause before retry
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  return fallbackExplanation;
 }
 
 // =========================================================================
@@ -1090,11 +1301,14 @@ export function translateReportAnalysis(analysis, language = 'en') {
       ...analysis.ai_explanation,
       overall_summary: t.summary,
       summary: t.summary,
+      simpleExplanation: t.summary,
       findings_summary: findings,
+      whatThisMeans: t.significance,
       possible_significance: t.significance,
       recommendations: t.recs,
       precautions: t.precautions || analysis.ai_explanation?.precautions,
       doctor_discussion_questions: t.questions,
+      questionsForDoctor: t.questions,
       disclaimer: t.disclaimer
     }
   };
@@ -1182,14 +1396,17 @@ export async function executeMedicalReportRAGPipeline({
   // 3. Grounded RAG Knowledge Retrieval
   const ragSources = retrieveRAGKnowledge(extractedText, testResults, 3);
 
-  // 4. Generate Detailed Patient-Friendly Explanation
+  // 4. Generate Detailed Patient-Friendly Explanation (Step 5)
   const todayStr = new Date().toISOString().split('T')[0];
-  const explanation = generateDetailedExplanation({
+  const explanation = await generateAiPatientFriendlyExplanation({
     testResults,
     patientName,
     reportType,
     hospital,
-    date: todayStr
+    date: todayStr,
+    extractedText,
+    language,
+    ragSources
   });
 
   const normalCount = testResults.filter(t => t.status === "Normal" || t.flag === "Normal").length;

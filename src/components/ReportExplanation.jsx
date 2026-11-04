@@ -55,11 +55,15 @@ export default function ReportExplanation({
     simpleExplanation:
       reportTranslated?.simpleExplanation ||
       report.aiExplanation?.simpleExplanation ||
+      report.aiExplanation?.overall_summary ||
+      report.ai_explanation?.overall_summary ||
       report.shortPreview ||
       'This laboratory value is within or near expected parameters shown on this report.',
     whatThisMeans:
       reportTranslated?.whatThisMeans ||
       report.aiExplanation?.whatThisMeans ||
+      report.aiExplanation?.possible_significance ||
+      report.ai_explanation?.possible_significance ||
       'The result may require discussion with a healthcare professional during routine consultation.',
     importantNote: getUiText('importantNote', selectedLanguage),
   };
@@ -108,7 +112,7 @@ export default function ReportExplanation({
                 {getUiText('safetyDisclaimer', selectedLanguage)}
               </p>
               <p className="text-[10px] text-amber-700 pt-0.5">
-                Discuss medical decisions with your healthcare professional. This software does not predict diseases, prescribe medicines, or provide emergency decisions. Sample data for frontend demonstration.
+                Discuss medical decisions with your healthcare professional. This software does not predict diseases, prescribe medicines, or provide emergency decisions. Clinical decision support generated from verified laboratory findings.
               </p>
             </div>
           </div>

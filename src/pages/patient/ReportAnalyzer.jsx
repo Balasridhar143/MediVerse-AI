@@ -55,12 +55,14 @@ export default function ReportAnalyzer() {
 
   // Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isRetryingStep5, setIsRetryingStep5] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [currentReportId, setCurrentReportId] = useState(urlReportId || null);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [step5Error, setStep5Error] = useState('');
 
   const fileInputRef = useRef(null);
 
@@ -197,12 +199,14 @@ export default function ReportAnalyzer() {
       });
 
       clearInterval(stepInterval);
+      setCurrentStep(analysisSteps.length - 1);
       const resData = response.rag_analysis || response.ragAnalysis || response.report;
       const repId = response.report_id || response.reportId || response.report?.id;
 
       setAnalysisResult(resData);
       setCurrentReportId(repId);
       setSavedSuccess(true);
+      setStep5Error('');
 
       // Persist in URL query so refreshing or sharing keeps the analysis
       if (repId) {
@@ -218,12 +222,41 @@ export default function ReportAnalyzer() {
     }
   };
 
+  /**
+   * Step 5 dedicated retry without re-uploading file
+   */
+  const handleRetryStep5 = async () => {
+    if (!currentReportId) return;
+    setIsRetryingStep5(true);
+    setStep5Error('');
+    try {
+      const res = await reportService.explainReport(currentReportId, selectedLanguage);
+      if (res.report) {
+        setAnalysisResult(res.report);
+      } else if (res.explanation) {
+        setAnalysisResult((prev) => ({
+          ...prev,
+          ai_explanation: res.explanation,
+          aiExplanation: res.explanation
+        }));
+      }
+      setSavedSuccess(true);
+    } catch (err) {
+      console.error('Step 5 retry failed:', err);
+      const msg = err.response?.data?.detail || err.message || 'Friendly explanation generation failed. Please try again.';
+      setStep5Error(msg);
+    } finally {
+      setIsRetryingStep5(false);
+    }
+  };
+
   const resetForm = () => {
     setFile(null);
     setAnalysisResult(null);
     setCurrentReportId(null);
     setValidationError('');
     setAnalysisError('');
+    setStep5Error('');
     setSavedSuccess(false);
     setCurrentStep(0);
     setSearchParams({});
@@ -231,7 +264,12 @@ export default function ReportAnalyzer() {
   };
 
   // Helper extracts explanation data safely across live analysis & loaded DB formats
-  const aiExp = analysisResult?.ai_explanation || analysisResult?.aiExplanation || {};
+  const rawAi = (analysisResult?.ai_explanation && typeof analysisResult.ai_explanation === 'object' && Object.keys(analysisResult.ai_explanation).length > 0)
+    ? analysisResult.ai_explanation
+    : (analysisResult?.aiExplanation && typeof analysisResult.aiExplanation === 'object' && Object.keys(analysisResult.aiExplanation).length > 0)
+    ? analysisResult.aiExplanation
+    : {};
+  const aiExp = rawAi;
   const structData = analysisResult?.structured_data || analysisResult?.structuredData || {};
   const parameters = analysisResult?.parameters || analysisResult?.test_results_table || [];
 
@@ -513,6 +551,19 @@ export default function ReportAnalyzer() {
                 language={selectedLanguage}
                 onChangeLanguage={handleLanguageChange}
               />
+              {currentReportId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={Sparkles}
+                  onClick={handleRetryStep5}
+                  disabled={isRetryingStep5}
+                  className="text-xs font-semibold text-teal-800 border-teal-300 hover:bg-teal-50"
+                  title="Re-synthesize patient-friendly clinical explanation without re-uploading"
+                >
+                  {isRetryingStep5 ? 'Generating Step 5...' : 'Refresh AI Explanation'}
+                </Button>
+              )}
               <Button variant="outline" size="sm" icon={RefreshCw} onClick={resetForm} className="text-xs">
                 Analyze Another
               </Button>
@@ -523,6 +574,52 @@ export default function ReportAnalyzer() {
               </Link>
             </div>
           </div>
+
+          {/* Step 5 Specific Error & Retry Alert */}
+          {step5Error && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-rose-900 block font-bold">Step 5: Friendly Explanation Error</strong>
+                  <p className="text-rose-800">{step5Error}</p>
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={RefreshCw}
+                onClick={handleRetryStep5}
+                disabled={isRetryingStep5}
+                className="bg-rose-700 hover:bg-rose-800 text-xs shrink-0 font-bold"
+              >
+                {isRetryingStep5 ? 'Retrying...' : 'Retry Step 5'}
+              </Button>
+            </div>
+          )}
+
+          {/* Prompt to generate explanation if missing */}
+          {!step5Error && !aiExp.overall_summary && !aiExp.summary && !aiExp.simpleExplanation && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-amber-900 block font-bold">Step 5: Patient-Friendly Explanation Pending</strong>
+                  <p className="text-amber-800">Parameters have been extracted, but the comprehensive clinical explanation has not yet been synthesized.</p>
+                </div>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Sparkles}
+                onClick={handleRetryStep5}
+                disabled={isRetryingStep5}
+                className="bg-teal-700 hover:bg-teal-800 text-xs shrink-0 font-bold"
+              >
+                {isRetryingStep5 ? 'Synthesizing...' : 'Generate Step 5 Explanation'}
+              </Button>
+            </div>
+          )}
 
           {/* Metric Highlights Ribbon */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

@@ -15,15 +15,27 @@ const normalizeDbReport = (r) => {
   if (!r) return null;
 
   const rawParams = r.parameters || [];
+  const rawAi = r.ai_explanation || r.aiExplanation || {};
+  const hasAi = rawAi && typeof rawAi === 'object' && Object.keys(rawAi).length > 0;
+  const rawStructured = r.structured_data || {};
+
   const normalizedParams = Array.isArray(rawParams) ? rawParams.map((p) => {
     const rawFlag = String(p.status || p.flag || '').toLowerCase();
     const indicator = p.indicator || (rawFlag.includes('low') || rawFlag.includes('below') ? 'below' : rawFlag.includes('high') || rawFlag.includes('above') ? 'above' : 'within');
     const statusText = p.status || p.flag || (indicator === 'within' ? 'Within Range' : indicator === 'above' ? 'Above Range' : 'Below Range');
 
+    const testTitle = p.test_name || p.name || 'Laboratory Marker';
+    const evalMatch = hasAi && Array.isArray(rawAi.test_evaluations)
+      ? rawAi.test_evaluations.find(e => e.test_name && e.test_name.toLowerCase() === testTitle.toLowerCase())
+      : null;
+
+    const purposeVal = p.purpose || evalMatch?.purpose || p.what_it_measures || p.easyMeaning || p.meaning || `Diagnostic biomarker assessing physiological function of ${testTitle}.`;
+    const whatItMeasuresVal = p.what_it_measures || evalMatch?.what_it_measures || purposeVal;
+
     return {
       id: p.id || p.test_name || p.name,
-      name: p.test_name || p.name || 'Laboratory Marker',
-      testName: p.test_name || p.name || 'Laboratory Marker',
+      name: testTitle,
+      testName: testTitle,
       value: p.patient_value !== undefined ? p.patient_value : p.value,
       unit: p.unit || '',
       referenceRange: p.reference_range || p.referenceRange || 'Standard reference bounds',
@@ -31,16 +43,34 @@ const normalizeDbReport = (r) => {
       status: statusText,
       flag: statusText,
       is_critical: Boolean(p.is_critical),
-      meaning: p.meaning || p.easyMeaning || '',
-      easyMeaning: p.easyMeaning || p.meaning || '',
-      purpose: p.purpose || p.meaning || '',
-      possible_reasons: p.possible_reasons || p.whatItMeans || '',
-      explanation: p.explanation || ''
+      meaning: p.meaning || whatItMeasuresVal,
+      easyMeaning: p.easyMeaning || purposeVal,
+      purpose: purposeVal,
+      what_it_measures: whatItMeasuresVal,
+      possible_reasons: p.possible_reasons || evalMatch?.possible_significance || p.whatItMeans || '',
+      explanation: p.explanation || evalMatch?.interpretation || ''
     };
   }) : [];
 
-  const rawStructured = r.structured_data || {};
-  const rawAi = r.ai_explanation || {};
+  const overallSummaryVal = hasAi
+    ? (rawAi.overall_summary || rawAi.summary || rawAi.simpleExplanation || rawStructured.overall_summary || 'Diagnostic laboratory analysis processed.')
+    : (rawStructured.overall_summary || 'Diagnostic laboratory analysis processed.');
+
+  const whatThisMeansVal = hasAi
+    ? (rawAi.whatThisMeans || rawAi.possible_significance || rawAi.findings_summary || rawStructured.important_findings || 'Review findings with your attending physician.')
+    : (rawStructured.important_findings || 'Review findings with your attending physician.');
+
+  const questionsList = hasAi
+    ? (rawAi.doctor_discussion_questions || rawAi.questionsForDoctor || [])
+    : [];
+
+  const recsList = hasAi
+    ? (rawAi.recommendations || [])
+    : [];
+
+  const precautionsList = hasAi
+    ? (rawAi.precautions || [])
+    : [];
 
   return {
     id: r.id,
@@ -61,19 +91,42 @@ const normalizeDbReport = (r) => {
     doctorNotes: r.doctor_notes || '',
     parameters: normalizedParams,
     rag_citations: r.rag_citations || [],
-    ai_explanation: rawAi,
+    ai_explanation: {
+      ...rawAi,
+      overall_summary: overallSummaryVal,
+      summary: overallSummaryVal,
+      simpleExplanation: overallSummaryVal,
+      findings_summary: rawAi.findings_summary || whatThisMeansVal,
+      whatThisMeans: whatThisMeansVal,
+      possible_significance: rawAi.possible_significance || whatThisMeansVal,
+      normal_findings: rawAi.normal_findings || [],
+      abnormal_findings: rawAi.abnormal_findings || [],
+      precautions: precautionsList,
+      recommendations: recsList,
+      doctor_discussion_questions: questionsList,
+      questionsForDoctor: questionsList,
+      test_evaluations: rawAi.test_evaluations || [],
+      disclaimer: rawAi.disclaimer || 'CLINICAL DECISION SUPPORT: Educational decision support only. Consult a registered medical practitioner.'
+    },
     aiExplanation: {
       ...rawAi,
       originalFinding: rawStructured.important_findings || rawAi.findings_summary || 'Standard laboratory panel',
-      simpleExplanation: rawAi.overall_summary || rawAi.summary || rawStructured.overall_summary || 'Analysis complete.',
-      whatThisMeans: rawAi.findings_summary || 'Review findings with your attending physician.',
-      recommendations: rawAi.recommendations || [],
-      questionsForDoctor: rawAi.doctor_discussion_questions || [],
+      simpleExplanation: overallSummaryVal,
+      overall_summary: overallSummaryVal,
+      summary: overallSummaryVal,
+      whatThisMeans: whatThisMeansVal,
+      possible_significance: rawAi.possible_significance || whatThisMeansVal,
+      findings_summary: rawAi.findings_summary || whatThisMeansVal,
+      recommendations: recsList,
+      precautions: precautionsList,
+      questionsForDoctor: questionsList,
+      doctor_discussion_questions: questionsList,
+      test_evaluations: rawAi.test_evaluations || [],
       disclaimer: rawAi.disclaimer || 'Educational and clinical decision support only.'
     },
     structured_data: rawStructured,
-    shortPreview: rawStructured.important_findings || rawAi.summary || 'Clinical laboratory analysis',
-    detailedFindings: rawStructured.overall_summary || rawAi.summary || 'Laboratory document successfully processed.'
+    shortPreview: rawStructured.important_findings || overallSummaryVal,
+    detailedFindings: overallSummaryVal
   };
 };
 
@@ -227,7 +280,27 @@ export const reportService = {
     const res = await api.post(`/reports/${id}/reanalyze`, { language }, {
       timeout: 120000
     });
-    return res.data;
+    const normalized = res.data.report ? normalizeDbReport(res.data.report) : null;
+    return {
+      ...res.data,
+      report: normalized
+    };
+  },
+
+  /**
+   * POST /api/reports/:id/explain
+   * Step 5 dedicated: Synthesizes or refreshes friendly explanation using existing extracted parameters
+   * without re-running OCR or document parsing.
+   */
+  async explainReport(id, language = 'en') {
+    const res = await api.post(`/reports/${id}/explain`, { language }, {
+      timeout: 120000
+    });
+    const normalized = res.data.report ? normalizeDbReport(res.data.report) : null;
+    return {
+      ...res.data,
+      report: normalized
+    };
   },
 
   /**
