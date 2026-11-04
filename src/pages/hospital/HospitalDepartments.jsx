@@ -106,7 +106,8 @@ export default function HospitalDepartments() {
     setActionError(null);
     try {
       const res = await hospitalDataService.getDepartmentDoctors(dept.id);
-      setDeptDoctorsList(res.doctors || []);
+      const list = Array.isArray(res) ? res : (res?.doctors || []);
+      setDeptDoctorsList(list);
     } catch (err) {
       console.error('Failed to load department doctors:', err);
       setDeptDoctorsList([]);
@@ -175,14 +176,14 @@ export default function HospitalDepartments() {
     setAssigningDoctor(true);
     setActionError(null);
     try {
-      await hospitalDataService.assignDoctorToDepartment(viewingDeptDoctors.id, {
-        doctorId: selectedDoctorToAssign
-      });
+      await hospitalDataService.assignDoctorToDepartment(viewingDeptDoctors.id, selectedDoctorToAssign);
       setActionSuccess('Doctor successfully assigned to department.');
       setSelectedDoctorToAssign('');
       const res = await hospitalDataService.getDepartmentDoctors(viewingDeptDoctors.id);
-      setDeptDoctorsList(res.doctors || []);
+      const list = Array.isArray(res) ? res : (res?.doctors || []);
+      setDeptDoctorsList(list);
       await fetchDepartments();
+      await fetchHospitalDoctors();
     } catch (err) {
       console.error('Assign doctor failed:', err);
       setActionError(err.response?.data?.detail || 'Failed to assign doctor to department.');

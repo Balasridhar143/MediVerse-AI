@@ -186,7 +186,7 @@ export default function DoctorDashboard() {
         badge="Clinician Workspace"
         badgeStatus="Active Duty"
         title={user?.name || user?.full_name || 'Dr. Practitioner'}
-        subtitle={`Specialization: ${user?.specialization || 'Clinical Specialist'} • ${user?.hospital_name || 'City Care Multispeciality Hospital'} • Registered Session`}
+        subtitle={`Specialization: ${user?.specialization || 'Clinical Specialist'}${user?.department ? ` • Department: ${user.department}` : ''} • ${user?.hospital_name || 'City Care Multispeciality Hospital'} • Registered Session`}
         action={
           <>
             <Link to="/doctor/clinical-context">

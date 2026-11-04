@@ -93,13 +93,15 @@ export default function HospitalDoctors() {
   const openAddDoctorModal = () => {
     setActionError(null);
     setActionSuccess(null);
+    const initialDept = departments[0];
     setDoctorForm({
       fullName: '',
       email: '',
       phone: '',
       password: '',
       specialization: 'General Medicine',
-      department: departments[0]?.name || 'General Medicine',
+      department: initialDept?.name || 'General Medicine',
+      departmentId: initialDept?.id || null,
       licenseNumber: '',
       experienceYears: 5,
       isAvailable: true,
@@ -123,6 +125,7 @@ export default function HospitalDoctors() {
         password: doctorForm.password || 'Doctor@123',
         specialization: doctorForm.specialization,
         department: doctorForm.department || doctorForm.specialization,
+        departmentId: doctorForm.departmentId,
         licenseNumber: doctorForm.licenseNumber.trim(),
         experienceYears: parseInt(doctorForm.experienceYears, 10) || 5,
         isAvailable: doctorForm.isAvailable,
@@ -143,9 +146,13 @@ export default function HospitalDoctors() {
     setActionError(null);
     setActionSuccess(null);
     setEditingDoctor(doc);
+    const matchedDept = departments.find(
+      (d) => (doc.departmentId && d.id === doc.departmentId) || (d.name && d.name.toLowerCase() === (doc.department || '').toLowerCase())
+    );
     setEditForm({
       specialization: doc.specialization || 'General Medicine',
-      department: doc.department || departments[0]?.name || 'General Medicine',
+      department: matchedDept ? matchedDept.name : (doc.department || departments[0]?.name || 'General Medicine'),
+      departmentId: matchedDept ? matchedDept.id : (doc.departmentId || departments[0]?.id || null),
       isAvailable: doc.status === 'On Duty' || doc.is_available === true,
     });
   };
@@ -158,11 +165,13 @@ export default function HospitalDoctors() {
       await hospitalDataService.updateDoctor(editingDoctor.id, {
         specialization: editForm.specialization,
         department: editForm.department,
+        departmentId: editForm.departmentId,
         isAvailable: editForm.isAvailable,
       });
       setActionSuccess(`Doctor ${editingDoctor.name} updated successfully.`);
       setEditingDoctor(null);
       await fetchDoctorRoster();
+      await fetchDepartmentOptions();
     } catch (err) {
       console.error('Doctor update error:', err);
       setActionError(err.response?.data?.detail || 'Failed to update doctor details.');
@@ -434,15 +443,22 @@ export default function HospitalDoctors() {
                     Assigned Department
                   </label>
                   <select
-                    value={doctorForm.department}
-                    onChange={(e) => setDoctorForm({ ...doctorForm, department: e.target.value })}
+                    value={doctorForm.departmentId || doctorForm.department}
+                    onChange={(e) => {
+                      const sel = departments.find((d) => d.id === e.target.value || d.name === e.target.value);
+                      setDoctorForm({
+                        ...doctorForm,
+                        department: sel ? sel.name : e.target.value,
+                        departmentId: sel ? sel.id : null,
+                      });
+                    }}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
                   >
                     {departments.length === 0 ? (
                       <option value="General Medicine">General Medicine</option>
                     ) : (
                       departments.map((dept) => (
-                        <option key={dept.id || dept.name} value={dept.name}>
+                        <option key={dept.id || dept.name} value={dept.id || dept.name}>
                           {dept.name}
                         </option>
                       ))
@@ -551,15 +567,22 @@ export default function HospitalDoctors() {
                   Department Assignment
                 </label>
                 <select
-                  value={editForm.department}
-                  onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
+                  value={editForm.departmentId || editForm.department}
+                  onChange={(e) => {
+                    const sel = departments.find((d) => d.id === e.target.value || d.name === e.target.value);
+                    setEditForm({
+                      ...editForm,
+                      department: sel ? sel.name : e.target.value,
+                      departmentId: sel ? sel.id : null,
+                    });
+                  }}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:border-teal-500 focus:outline-none"
                 >
                   {departments.length === 0 ? (
                     <option value="General Medicine">General Medicine</option>
                   ) : (
                     departments.map((dept) => (
-                      <option key={dept.id || dept.name} value={dept.name}>
+                      <option key={dept.id || dept.name} value={dept.id || dept.name}>
                         {dept.name}
                       </option>
                     ))

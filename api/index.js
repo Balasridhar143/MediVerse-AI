@@ -1006,7 +1006,15 @@ app.post(['/auth/login', '/api/auth/login'], async (req, res) => {
       const pats = await sql`SELECT id, age, gender, blood_group, phone, address FROM patients WHERE user_id = ${user.id} LIMIT 1;`;
       if (pats.length > 0) profileData = pats[0];
     } else if (user.role === 'doctor') {
-      const docs = await sql`SELECT id, specialization, license_number, hospital_name FROM doctors WHERE user_id = ${user.id} LIMIT 1;`;
+      const docs = await sql`
+        SELECT d.id, d.specialization, d.license_number, d.hospital_name, d.hospital_id,
+               COALESCE(dha.department_name, d.department, 'General Medicine') as department,
+               COALESCE(dha.department_id, d.department_id) as department_id
+        FROM doctors d
+        LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.is_primary = true
+        WHERE d.user_id = ${user.id} OR d.id = ${user.id}
+        LIMIT 1;
+      `;
       if (docs.length > 0) profileData = docs[0];
     } else if (user.role === 'hospital_admin') {
       const hospAdms = await sql`SELECT id, name as hospital_name, id as facility_id FROM hospitals WHERE admin_user_id = ${user.id} LIMIT 1;`;
@@ -1087,7 +1095,15 @@ app.get(['/auth/me', '/api/auth/me'], authenticateToken, async (req, res) => {
       const pats = await sql`SELECT id, age, gender, blood_group, phone, address FROM patients WHERE user_id = ${user.id} LIMIT 1;`;
       if (pats.length > 0) profileData = pats[0];
     } else if (user.role === 'doctor') {
-      const docs = await sql`SELECT id, specialization, license_number, hospital_name FROM doctors WHERE user_id = ${user.id} LIMIT 1;`;
+      const docs = await sql`
+        SELECT d.id, d.specialization, d.license_number, d.hospital_name, d.hospital_id,
+               COALESCE(dha.department_name, d.department, 'General Medicine') as department,
+               COALESCE(dha.department_id, d.department_id) as department_id
+        FROM doctors d
+        LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.is_primary = true
+        WHERE d.user_id = ${user.id} OR d.id = ${user.id}
+        LIMIT 1;
+      `;
       if (docs.length > 0) profileData = docs[0];
     } else if (user.role === 'hospital_admin') {
       const hospAdms = await sql`SELECT id, name as hospital_name, id as facility_id FROM hospitals WHERE admin_user_id = ${user.id} LIMIT 1;`;
@@ -4505,6 +4521,8 @@ app.get(['/hospital/doctors', '/api/hospital/doctors'], optionalAuthToken, async
       SELECT DISTINCT ON (d.id)
              d.id, COALESCE(u.full_name, d.full_name) as name, d.specialization,
              COALESCE(dha.department_name, d.department, 'General Medicine') as department,
+             COALESCE(dha.department_id, d.department_id) as "departmentId",
+             d.license_number as "licenseNumber",
              'OPD Room ' || (SUBSTRING(d.id FROM 5 FOR 3)) as room,
              COALESCE(d.consultation_types->>0, 'Video & In-Person') as "consultationType",
              'Mon - Fri (09:00 AM - 05:00 PM)' as availability,
@@ -4799,7 +4817,7 @@ app.get(['/hospital/departments/:id/doctors', '/api/hospital/departments/:id/doc
     const doctors = await sql`
       SELECT DISTINCT ON (d.id)
         d.id, COALESCE(u.full_name, d.full_name) as name, d.specialization,
-        d.license_number, d.hospital_id,
+        d.license_number as "licenseNumber", d.hospital_id as "hospitalId",
         COALESCE(dha.department_name, d.department, ${deptName}) as department,
         COALESCE(dha.department_id, d.department_id, ${id}) as "departmentId",
         'OPD Room ' || (SUBSTRING(d.id FROM 5 FOR 3)) as room,
@@ -4813,10 +4831,8 @@ app.get(['/hospital/departments/:id/doctors', '/api/hospital/departments/:id/doc
       LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.hospital_id = ${hospitalId}
       WHERE (d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId})
         AND (
-          d.department_id = ${id}
-          OR dha.department_id = ${id}
-          OR LOWER(d.department) = LOWER(${deptName})
-          OR LOWER(dha.department_name) = LOWER(${deptName})
+          COALESCE(dha.department_id, d.department_id) = ${id}
+          OR LOWER(COALESCE(dha.department_name, d.department)) = LOWER(${deptName})
         )
       ORDER BY d.id, d.created_at DESC;
     `;
@@ -4836,7 +4852,10 @@ app.post(['/hospital/departments/:id/assign-doctor', '/api/hospital/departments/
     }
 
     const { id } = req.params;
-    const { doctorId } = req.body;
+    let { doctorId } = req.body;
+    if (typeof doctorId === 'object' && doctorId !== null) {
+      doctorId = doctorId.doctorId || doctorId.id;
+    }
     if (!doctorId) {
       return res.status(400).json({ detail: 'doctorId is required.' });
     }
@@ -4855,10 +4874,22 @@ app.post(['/hospital/departments/:id/assign-doctor', '/api/hospital/departments/
     }
     const dept = deptRows[0];
 
-    // Check doctor exists
-    const docRows = await sql`SELECT id, full_name, hospital_id FROM doctors WHERE id = ${doctorId} OR user_id = ${doctorId} LIMIT 1;`;
+    // Check doctor exists and belongs to or is affiliated with this hospital
+    const docRows = await sql`
+      SELECT d.id, d.full_name, d.hospital_id
+      FROM doctors d
+      LEFT JOIN doctor_hospital_affiliations dha ON dha.doctor_id = d.id AND dha.hospital_id = ${hospitalId}
+      WHERE (d.id = ${doctorId} OR d.user_id = ${doctorId})
+        AND (d.hospital_id = ${hospitalId} OR dha.hospital_id = ${hospitalId})
+      LIMIT 1;
+    `;
     if (docRows.length === 0) {
-      return res.status(404).json({ detail: 'Doctor profile not found.' });
+      // Check if clinician exists at another hospital (cross-hospital security check)
+      const anyDoc = await sql`SELECT id, full_name, hospital_id FROM doctors WHERE id = ${doctorId} OR user_id = ${doctorId} LIMIT 1;`;
+      if (anyDoc.length > 0 && anyDoc[0].hospital_id && anyDoc[0].hospital_id !== hospitalId) {
+        return res.status(403).json({ detail: 'Cross-hospital assignment forbidden. Clinician is registered under another hospital facility.' });
+      }
+      return res.status(404).json({ detail: 'Doctor profile not found in your hospital facility.' });
     }
     const targetDoc = docRows[0];
 
@@ -4935,12 +4966,27 @@ app.post(['/hospital/doctors', '/api/hospital/doctors'], authenticateToken, asyn
     }
 
     const spec = specialization || 'General Medicine';
-    const dept = department || spec || 'General Medicine';
-    const deptId = departmentId || department_id || null;
+    let dept = department || spec || 'General Medicine';
+    let deptId = departmentId || department_id || null;
     const licNum = licenseNumber || license_number || null;
     const exp = parseInt(experienceYears || experience_years, 10) || 5;
     const fee = parseFloat(consultationFee || consultation_fee) || 500;
     const available = isAvailable !== undefined ? Boolean(isAvailable) : is_available !== undefined ? Boolean(is_available) : true;
+
+    // Resolve department ID and Name from hospital's departments
+    if (deptId) {
+      const dRows = await sql`SELECT id, name FROM departments WHERE id = ${deptId} AND hospital_id = ${hospitalId} LIMIT 1;`;
+      if (dRows.length > 0) {
+        dept = dRows[0].name;
+        deptId = dRows[0].id;
+      }
+    } else if (dept) {
+      const dRows = await sql`SELECT id, name FROM departments WHERE LOWER(name) = LOWER(${dept}) AND hospital_id = ${hospitalId} LIMIT 1;`;
+      if (dRows.length > 0) {
+        dept = dRows[0].name;
+        deptId = dRows[0].id;
+      }
+    }
 
     // Check if user account with this email already exists
     const existingUsers = await sql`SELECT id, role, full_name, email FROM users WHERE LOWER(email) = ${cleanEmail} LIMIT 1;`;
@@ -5069,18 +5115,37 @@ app.put(['/hospital/doctors/:id', '/api/hospital/doctors/:id'], authenticateToke
       LIMIT 1;
     `;
     if (docRows.length === 0) {
+      const anyDoc = await sql`SELECT id, hospital_id FROM doctors WHERE id = ${id} OR user_id = ${id} LIMIT 1;`;
+      if (anyDoc.length > 0 && anyDoc[0].hospital_id && anyDoc[0].hospital_id !== hospitalId) {
+        return res.status(403).json({ detail: 'Cross-hospital assignment forbidden. Doctor is registered under another hospital facility.' });
+      }
       return res.status(404).json({ detail: 'Doctor not found or not affiliated with your hospital.' });
     }
 
     const cur = docRows[0];
     const { department, departmentId, department_id, specialization, isAvailable, is_available, status: dutyStatus, employmentStatus, employment_status, consultationFee, consultation_fee } = req.body;
 
-    const newDept = department !== undefined ? department : cur.department;
-    const newDeptId = departmentId !== undefined ? departmentId : department_id !== undefined ? department_id : cur.department_id;
+    let newDept = department !== undefined ? department : cur.department;
+    let newDeptId = departmentId !== undefined ? departmentId : department_id !== undefined ? department_id : cur.department_id;
     const newSpec = specialization !== undefined ? specialization : cur.specialization;
     const newAvailable = isAvailable !== undefined ? Boolean(isAvailable) : is_available !== undefined ? Boolean(is_available) : dutyStatus === 'On Duty' ? true : dutyStatus === 'Off Duty' ? false : cur.is_available;
     const newEmpStatus = employmentStatus || employment_status || cur.employment_status || 'ACTIVE';
     const newFee = consultationFee !== undefined ? parseFloat(consultationFee) : consultation_fee !== undefined ? parseFloat(consultation_fee) : cur.consultation_fee;
+
+    // Resolve department ID & Name with hospital's departments
+    if (departmentId || department_id) {
+      const dRows = await sql`SELECT id, name FROM departments WHERE id = ${newDeptId} AND hospital_id = ${hospitalId} LIMIT 1;`;
+      if (dRows.length > 0) {
+        newDept = dRows[0].name;
+        newDeptId = dRows[0].id;
+      }
+    } else if (department && department !== cur.department) {
+      const dRows = await sql`SELECT id, name FROM departments WHERE LOWER(name) = LOWER(${department}) AND hospital_id = ${hospitalId} LIMIT 1;`;
+      if (dRows.length > 0) {
+        newDept = dRows[0].name;
+        newDeptId = dRows[0].id;
+      }
+    }
 
     await sql`
       UPDATE doctors

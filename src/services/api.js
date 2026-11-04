@@ -751,7 +751,8 @@ export const hospitalDataService = {
   },
 
   async assignDoctorToDepartment(departmentId, doctorId) {
-    const res = await api.post(`/hospital/departments/${departmentId}/assign-doctor`, { doctorId });
+    const cleanDocId = typeof doctorId === 'object' && doctorId !== null ? (doctorId.doctorId || doctorId.id) : doctorId;
+    const res = await api.post(`/hospital/departments/${departmentId}/assign-doctor`, { doctorId: cleanDocId });
     return res.data;
   },
 

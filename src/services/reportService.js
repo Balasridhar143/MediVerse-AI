@@ -61,9 +61,11 @@ const normalizeDbReport = (r) => {
     doctorNotes: r.doctor_notes || '',
     parameters: normalizedParams,
     rag_citations: r.rag_citations || [],
+    ai_explanation: rawAi,
     aiExplanation: {
+      ...rawAi,
       originalFinding: rawStructured.important_findings || rawAi.findings_summary || 'Standard laboratory panel',
-      simpleExplanation: rawAi.summary || rawStructured.overall_summary || 'Analysis complete.',
+      simpleExplanation: rawAi.overall_summary || rawAi.summary || rawStructured.overall_summary || 'Analysis complete.',
       whatThisMeans: rawAi.findings_summary || 'Review findings with your attending physician.',
       recommendations: rawAi.recommendations || [],
       questionsForDoctor: rawAi.doctor_discussion_questions || [],

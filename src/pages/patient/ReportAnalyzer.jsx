@@ -197,8 +197,8 @@ export default function ReportAnalyzer() {
       });
 
       clearInterval(stepInterval);
-      const resData = response.ragAnalysis || response.report;
-      const repId = response.reportId || response.report?.id;
+      const resData = response.rag_analysis || response.ragAnalysis || response.report;
+      const repId = response.report_id || response.reportId || response.report?.id;
 
       setAnalysisResult(resData);
       setCurrentReportId(repId);
