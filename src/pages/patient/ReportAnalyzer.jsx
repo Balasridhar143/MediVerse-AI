@@ -63,8 +63,49 @@ export default function ReportAnalyzer() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
   const [step5Error, setStep5Error] = useState('');
+  const [existingReports, setExistingReports] = useState([]);
 
   const fileInputRef = useRef(null);
+
+  // Load existing reports for patient selection
+  useEffect(() => {
+    let isMounted = true;
+    reportService.getReports()
+      .then((reps) => {
+        if (isMounted && Array.isArray(reps)) {
+          setExistingReports(reps);
+        }
+      })
+      .catch((e) => console.warn('Failed to load user reports list:', e.message));
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleSelectExistingReport = (repId) => {
+    if (!repId) {
+      setCurrentReportId(null);
+      setFile(null);
+      return;
+    }
+    const matched = existingReports.find((r) => r.id === repId);
+    if (matched) {
+      setCurrentReportId(matched.id);
+      setReportName(matched.reportName);
+      setPatientName(matched.patientName);
+      setHospital(matched.hospital);
+      setDoctor(matched.doctor);
+      setReportType(matched.reportType);
+      setFile(null);
+      setValidationError('');
+      setAnalysisError('');
+      setSearchParams({ reportId: matched.id }, { replace: true });
+      if (matched.parameters && matched.parameters.length > 0) {
+        setAnalysisResult(matched);
+        setSavedSuccess(true);
+      }
+    }
+  };
 
   // 1. Load saved analysis on mount or URL param change (Persistence requirement)
   useEffect(() => {
@@ -189,6 +230,7 @@ export default function ReportAnalyzer() {
 
     try {
       const response = await reportService.analyzeReport({
+        reportId: currentReportId,
         file,
         patientName: patientName || user?.full_name || 'Patient Record',
         reportName: reportName || file?.name?.replace(/\.[^/.]+$/, '') || 'Diagnostic Report',
@@ -349,6 +391,33 @@ export default function ReportAnalyzer() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-4">
             <Card title="Upload Diagnostic Document" icon={Upload}>
+              {/* Existing Reports Quick Selector */}
+              {existingReports.length > 0 && (
+                <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <FileCheck2 className="w-4 h-4 text-teal-700" />
+                      <span>Select From Your Uploaded Medical Records</span>
+                    </label>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {existingReports.length} recorded
+                    </span>
+                  </div>
+                  <select
+                    value={currentReportId || ''}
+                    onChange={(e) => handleSelectExistingReport(e.target.value)}
+                    className="w-full p-2.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-800 focus:border-teal-500 focus:outline-hidden"
+                  >
+                    <option value="">-- Choose an uploaded report or drop a new file below --</option>
+                    {existingReports.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.reportName} ({r.date} • {r.reportType} • {r.hospital})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div
                 onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                 onDragLeave={(e) => { e.preventDefault(); setIsDragOver(false); }}
@@ -451,7 +520,7 @@ export default function ReportAnalyzer() {
                     size="md"
                     icon={Sparkles}
                     onClick={runAnalysis}
-                    disabled={!file}
+                    disabled={!file && !currentReportId}
                     className="bg-teal-700 hover:bg-teal-800 text-xs font-bold shadow-2xs"
                   >
                     Run Clinical RAG Analysis

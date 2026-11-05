@@ -1938,8 +1938,13 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       } catch (e) {}
     }
 
+    const sql = getDb();
+    await ensureTables(sql);
+
     const file = req.file;
     let {
+      reportId: candidateReportId,
+      report_id: candidateReportIdSnake,
       file_data,
       file_name = 'Diagnostic_Report.pdf',
       file_type = 'application/pdf',
@@ -1954,8 +1959,23 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       lang
     } = req.body;
 
-    const reportId = `rep_${crypto.randomBytes(6).toString('hex')}`;
-    let fileLocation = `neon://medical_reports/${reportId}`;
+    const requestedExistingId = candidateReportId || candidateReportIdSnake;
+    let existingReport = null;
+    if (requestedExistingId) {
+      try {
+        const existRows = await sql`
+          SELECT * FROM medical_reports WHERE id = ${requestedExistingId} LIMIT 1;
+        `;
+        if (existRows.length > 0) {
+          existingReport = existRows[0];
+        }
+      } catch (e) {
+        console.warn('Existing report lookup warning:', e.message);
+      }
+    }
+
+    const reportId = existingReport ? existingReport.id : `rep_${crypto.randomBytes(6).toString('hex')}`;
+    let fileLocation = existingReport?.file_location || `neon://medical_reports/${reportId}`;
     let fileBuffer = null;
 
     if (file && file.buffer) {
@@ -1972,6 +1992,28 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       } catch (e) {
         console.warn('Failed to parse base64 file data:', e.message);
       }
+    } else if (existingReport && existingReport.file_data) {
+      try {
+        const base64Data = existingReport.file_data.replace(/^data:[^;]+;base64,/, '');
+        fileBuffer = Buffer.from(base64Data, 'base64');
+        file_size = existingReport.file_size || fileBuffer.length;
+        file_name = existingReport.file_name || file_name;
+        file_type = existingReport.file_type || file_type;
+        file_data = existingReport.file_data;
+        if (!raw_text && existingReport.extracted_text) {
+          raw_text = existingReport.extracted_text;
+        }
+      } catch (e) {
+        console.warn('Failed to parse existing report file data:', e.message);
+      }
+    }
+
+    if (existingReport) {
+      patient_name = patient_name || existingReport.patient_name;
+      report_name = report_name || existingReport.report_name;
+      report_type = report_type || existingReport.report_type;
+      hospital = hospital || existingReport.hospital;
+      doctor = doctor || existingReport.doctor;
     }
 
     const targetLang = lang || language || 'en';
@@ -1981,17 +2023,15 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       fileBuffer,
       fileName: file_name,
       mimeType: file_type,
-      patientName: patient_name || (user && user.full_name) || 'Patient',
+      patientName: patient_name || (user && user.full_name) || (existingReport && existingReport.patient_name) || 'Patient',
       reportType: report_type,
       hospital,
       rawText: raw_text,
       language: targetLang
     });
-    const todayStr = new Date().toISOString().split('T')[0];
-    const sql = getDb();
-    await ensureTables(sql);
+    const todayStr = existingReport?.date || new Date().toISOString().split('T')[0];
 
-    let targetUserId = null;
+    let targetUserId = existingReport?.user_id || null;
     if (user && user.id) {
       try {
         const uCheck = await sql`SELECT id FROM users WHERE id = ${user.id} LIMIT 1;`;
@@ -2002,46 +2042,64 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
         console.warn('User ID verification notice:', e.message);
       }
     }
-    const patientDisplayName = patient_name || (user && user.full_name) || 'Patient Record';
+    const patientDisplayName = patient_name || (user && user.full_name) || existingReport?.patient_name || 'Patient Record';
 
-    // Persist to Neon PostgreSQL
-    await sql`
-      INSERT INTO medical_reports (
-        id, user_id, patient_id, patient_name, report_name, report_type,
-        hospital, doctor, status, date,
-        parameters, structured_data, ai_explanation,
-        extracted_text, rag_citations, file_name, file_size, file_type,
-        file_data, file_location, original_filename, doctor_review_status, created_at
-      ) VALUES (
-        ${reportId}, ${targetUserId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
-        ${hospital}, ${doctor}, 'Ready', ${todayStr},
-        ${JSON.stringify(ragAnalysis.parameters || [])},
-        ${JSON.stringify(ragAnalysis.structured_data || {})},
-        ${JSON.stringify(ragAnalysis.ai_explanation || {})},
-        ${ragAnalysis.extracted_text || ''},
-        ${JSON.stringify(ragAnalysis.rag_citations || [])},
-        ${file_name},
-        ${file_size || (fileBuffer ? fileBuffer.length : 0)},
-        ${file_type},
-        ${file_data || null},
-        ${fileLocation},
-        ${file_name},
-        'Pending Review',
-        NOW()
-      );
-    `;
+    if (existingReport) {
+      // Update existing record without generating a duplicate report
+      await sql`
+        UPDATE medical_reports
+        SET parameters = ${JSON.stringify(ragAnalysis.parameters || [])},
+            structured_data = ${JSON.stringify(ragAnalysis.structured_data || {})},
+            ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+            rag_citations = ${JSON.stringify(ragAnalysis.rag_citations || [])},
+            extracted_text = ${ragAnalysis.extracted_text || existingReport.extracted_text || ''},
+            file_name = ${file_name || existingReport.file_name},
+            file_type = ${file_type || existingReport.file_type},
+            file_size = ${file_size || existingReport.file_size || 0},
+            file_data = ${file_data || existingReport.file_data || null}
+        WHERE id = ${existingReport.id};
+      `;
+    } else {
+      // Persist new report to Neon PostgreSQL
+      await sql`
+        INSERT INTO medical_reports (
+          id, user_id, patient_id, patient_name, report_name, report_type,
+          hospital, doctor, status, date,
+          parameters, structured_data, ai_explanation,
+          extracted_text, rag_citations, file_name, file_size, file_type,
+          file_data, file_location, original_filename, doctor_review_status, created_at
+        ) VALUES (
+          ${reportId}, ${targetUserId}, ${targetUserId}, ${patientDisplayName}, ${report_name}, ${report_type},
+          ${hospital}, ${doctor}, 'Ready', ${todayStr},
+          ${JSON.stringify(ragAnalysis.parameters || [])},
+          ${JSON.stringify(ragAnalysis.structured_data || {})},
+          ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+          ${ragAnalysis.extracted_text || ''},
+          ${JSON.stringify(ragAnalysis.rag_citations || [])},
+          ${file_name},
+          ${file_size || (fileBuffer ? fileBuffer.length : 0)},
+          ${file_type},
+          ${file_data || null},
+          ${fileLocation},
+          ${file_name},
+          'Pending Review',
+          NOW()
+        );
+      `;
+    }
 
     // Log audit entry
     await logAuditEvent(sql, {
       userId: targetUserId,
       role: user ? user.role : 'patient',
       email: user ? user.email : null,
-      action: 'REPORT_ANALYZE',
+      action: existingReport ? 'REPORT_REANALYZE' : 'REPORT_ANALYZE',
       resource: 'medical_reports',
       resourceId: reportId,
       details: {
         report_name,
         report_type,
+        is_existing: Boolean(existingReport),
         parameter_count: ragAnalysis.parameters.length,
         abnormal_count: ragAnalysis.structured_data.abnormal_parameters,
         citations_count: ragAnalysis.rag_citations.length
@@ -2063,34 +2121,54 @@ app.post(['/reports/analyze', '/api/reports/analyze'], conditionalMulter, async 
       console.warn('Job record notice:', jobErr.message);
     }
 
-    return res.status(201).json({
+    const responsePayload = {
+      id: reportId,
+      user_id: targetUserId,
+      patient_id: targetUserId,
+      patient_name: patientDisplayName,
+      report_name,
+      report_type,
+      hospital,
+      doctor,
+      status: 'Ready',
+      date: todayStr,
+      parameters: ragAnalysis.parameters,
+      structured_data: ragAnalysis.structured_data,
+      ai_explanation: ragAnalysis.ai_explanation,
+      rag_citations: ragAnalysis.rag_citations,
+      file_name,
+      file_data,
+      doctor_review_status: 'Pending Review',
+      created_at: existingReport?.created_at || new Date().toISOString()
+    };
+
+    return res.status(existingReport ? 200 : 201).json({
       success: true,
       report_id: reportId,
+      id: reportId,
       job_id: jobId,
-      report: {
-        id: reportId,
-        user_id: targetUserId,
-        patient_name: patientDisplayName,
-        report_name,
-        report_type,
-        hospital,
-        doctor,
+      data: {
+        reportId: reportId,
+        fileName: file_name,
+        fileType: file_type,
+        fileSize: file_size || (fileBuffer ? fileBuffer.length : 0),
         status: 'Ready',
-        date: todayStr,
-        parameters: ragAnalysis.parameters,
-        structured_data: ragAnalysis.structured_data,
-        ai_explanation: ragAnalysis.ai_explanation,
-        rag_citations: ragAnalysis.rag_citations,
-        file_name,
-        file_data,
-        doctor_review_status: 'Pending Review',
-        created_at: new Date().toISOString()
+        createdAt: responsePayload.created_at
       },
+      report: responsePayload,
       rag_analysis: ragAnalysis
     });
   } catch (err) {
     console.error('Report analyze error:', err);
-    return res.status(500).json({ detail: `Medical Report RAG analysis failed: ${err.message}` });
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'REPORT_PROCESSING_FAILED',
+        message: `Medical Report RAG analysis failed: ${err.message}`,
+        retryable: true
+      },
+      detail: `Medical Report RAG analysis failed: ${err.message}`
+    });
   }
 });
 
@@ -2176,6 +2254,341 @@ app.get(['/reports/jobs/:jobId', '/api/reports/jobs/:jobId'], async (req, res) =
   } catch (err) {
     console.error('Fetch report job error:', err);
     return res.status(500).json({ detail: `Failed to fetch report job: ${err.message}` });
+  }
+});
+
+// =========================================================================
+// PHASE 4 EXPLICIT REPORT ANALYSIS WORKFLOW CONTRACTS
+// =========================================================================
+
+// 4.2 Start Analysis API
+app.post(['/reports/start-analysis', '/api/reports/start-analysis'], async (req, res) => {
+  try {
+    const { reportId: candId, report_id: candIdSnake, language = 'en' } = req.body || {};
+    const reportId = candId || candIdSnake;
+
+    if (!reportId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REPORT_ID_REQUIRED', message: 'reportId parameter is required to initiate analysis', retryable: false },
+        detail: 'reportId is required'
+      });
+    }
+
+    let user = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader) {
+      try {
+        const decoded = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+        user = decoded;
+        if (!user.id && user.sub) user.id = user.sub;
+      } catch (e) {}
+    }
+
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const repRows = await sql`SELECT * FROM medical_reports WHERE id = ${reportId} LIMIT 1;`;
+    if (repRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'REPORT_NOT_FOUND', message: 'Medical report not found', retryable: false },
+        detail: 'Medical report not found'
+      });
+    }
+
+    const report = repRows[0];
+    const analysisId = `analysis_${crypto.randomBytes(6).toString('hex')}`;
+    const targetUserId = user ? user.id : report.user_id;
+
+    await sql`
+      INSERT INTO report_analysis_jobs (
+        id, report_id, user_id, status, stage, progress, created_at, updated_at
+      ) VALUES (
+        ${analysisId}, ${reportId}, ${targetUserId}, 'queued', 'text_extraction', 15, NOW(), NOW()
+      );
+    `;
+
+    // Process analysis asynchronously and update progress milestones
+    (async () => {
+      try {
+        await sql`
+          UPDATE report_analysis_jobs
+          SET status = 'processing', stage = 'text_extraction', progress = 25, updated_at = NOW()
+          WHERE id = ${analysisId};
+        `;
+
+        let fileBuffer = null;
+        if (report.file_data) {
+          try {
+            const base64Data = report.file_data.replace(/^data:[^;]+;base64,/, '');
+            fileBuffer = Buffer.from(base64Data, 'base64');
+          } catch (e) {}
+        }
+
+        await sql`
+          UPDATE report_analysis_jobs
+          SET stage = 'value_extraction', progress = 50, updated_at = NOW()
+          WHERE id = ${analysisId};
+        `;
+
+        const ragAnalysis = await executeMedicalReportRAGPipeline({
+          fileBuffer,
+          fileName: report.file_name,
+          mimeType: report.file_type,
+          patientName: report.patient_name,
+          reportType: report.report_type,
+          hospital: report.hospital,
+          rawText: report.extracted_text,
+          language
+        });
+
+        await sql`
+          UPDATE report_analysis_jobs
+          SET stage = 'generating_explanation', progress = 80, updated_at = NOW()
+          WHERE id = ${analysisId};
+        `;
+
+        await sql`
+          UPDATE medical_reports
+          SET parameters = ${JSON.stringify(ragAnalysis.parameters || [])},
+              structured_data = ${JSON.stringify(ragAnalysis.structured_data || {})},
+              ai_explanation = ${JSON.stringify(ragAnalysis.ai_explanation || {})},
+              rag_citations = ${JSON.stringify(ragAnalysis.rag_citations || [])},
+              extracted_text = ${ragAnalysis.extracted_text || report.extracted_text || ''}
+          WHERE id = ${reportId};
+        `;
+
+        await sql`
+          UPDATE report_analysis_jobs
+          SET status = 'completed', stage = 'completed', progress = 100, result = ${JSON.stringify(ragAnalysis)}, updated_at = NOW()
+          WHERE id = ${analysisId};
+        `;
+      } catch (procErr) {
+        console.error('[Start Analysis Background Error]', procErr);
+        await sql`
+          UPDATE report_analysis_jobs
+          SET status = 'failed', stage = 'failed', error_message = ${procErr.message}, updated_at = NOW()
+          WHERE id = ${analysisId};
+        `;
+      }
+    })();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        analysisId,
+        reportId,
+        status: 'queued'
+      }
+    });
+  } catch (err) {
+    console.error('start-analysis error:', err);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'REPORT_PROCESSING_FAILED', message: err.message, retryable: true },
+      detail: err.message
+    });
+  }
+});
+
+// 4.3 Analysis Status API
+app.get(['/reports/analysis/:analysisId/status', '/api/reports/analysis/:analysisId/status'], async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, report_id, user_id, status, stage, progress, error_message, created_at, updated_at
+      FROM report_analysis_jobs
+      WHERE id = ${analysisId}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ANALYSIS_NOT_FOUND', message: 'Analysis job not found', retryable: false },
+        detail: 'Analysis job not found'
+      });
+    }
+
+    const job = rows[0];
+    const rawStage = (job.stage || 'processing').toLowerCase().replace(/\s+/g, '_');
+    const rawStatus = (job.status || 'processing').toLowerCase();
+
+    const stageMessageMap = {
+      queued: 'Report analysis is queued for execution',
+      text_extraction: 'Extracting text from digital document or scanned OCR',
+      ocr_processing: 'Running optical character recognition on document scan',
+      value_extraction: 'Extracting laboratory parameters and measured units',
+      range_comparison: 'Comparing values against clinical reference intervals',
+      knowledge_retrieval: 'Retrieving evidence-based guidelines from medical knowledge base',
+      generating_explanation: 'Synthesizing patient-friendly clinical explanation',
+      completed: 'Report analysis completed successfully',
+      failed: job.error_message || 'Report analysis failed'
+    };
+
+    return res.json({
+      success: true,
+      data: {
+        analysisId: job.id,
+        reportId: job.report_id,
+        status: rawStatus,
+        currentStep: rawStage,
+        progress: job.progress !== undefined ? job.progress : (rawStatus === 'completed' ? 100 : 25),
+        message: stageMessageMap[rawStage] || job.stage || 'Processing report'
+      }
+    });
+  } catch (err) {
+    console.error('analysis status error:', err);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'STATUS_FETCH_FAILED', message: err.message, retryable: true },
+      detail: err.message
+    });
+  }
+});
+
+// 4.4 Extracted Data API
+app.get(['/reports/analysis/:analysisId/extracted-data', '/api/reports/analysis/:analysisId/extracted-data'], async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, report_id, result
+      FROM report_analysis_jobs
+      WHERE id = ${analysisId}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ANALYSIS_NOT_FOUND', message: 'Analysis job not found', retryable: false },
+        detail: 'Analysis job not found'
+      });
+    }
+
+    const job = rows[0];
+    let rawParams = [];
+    if (job.result && Array.isArray(job.result.parameters)) {
+      rawParams = job.result.parameters;
+    } else if (job.report_id) {
+      const repRows = await sql`SELECT parameters FROM medical_reports WHERE id = ${job.report_id} LIMIT 1;`;
+      if (repRows.length > 0 && Array.isArray(repRows[0].parameters)) {
+        rawParams = repRows[0].parameters;
+      }
+    }
+
+    const tests = rawParams.map((p) => {
+      let low = 0;
+      let high = 0;
+      const refStr = String(p.reference_range || p.referenceRange || '');
+      const rangeMatch = refStr.match(/(\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)/i);
+      if (rangeMatch) {
+        low = parseFloat(rangeMatch[1]);
+        high = parseFloat(rangeMatch[2]);
+      }
+      return {
+        testName: p.test_name || p.name || 'Laboratory Test',
+        value: p.patient_value !== undefined ? p.patient_value : p.value,
+        unit: p.unit || '',
+        referenceRange: {
+          low,
+          high,
+          unit: p.unit || ''
+        },
+        status: (p.status || p.flag || 'normal').toLowerCase()
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        analysisId: job.id,
+        reportId: job.report_id,
+        tests
+      }
+    });
+  } catch (err) {
+    console.error('extracted-data error:', err);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'EXTRACTED_DATA_FAILED', message: err.message, retryable: true },
+      detail: err.message
+    });
+  }
+});
+
+// 4.5 Friendly Explanation API
+app.get(['/reports/analysis/:analysisId/friendly-explanation', '/api/reports/analysis/:analysisId/friendly-explanation'], async (req, res) => {
+  try {
+    const { analysisId } = req.params;
+    const sql = getDb();
+    await ensureTables(sql);
+
+    const rows = await sql`
+      SELECT id, report_id, status, result
+      FROM report_analysis_jobs
+      WHERE id = ${analysisId}
+      LIMIT 1;
+    `;
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ANALYSIS_NOT_FOUND', message: 'Analysis job not found', retryable: false },
+        detail: 'Analysis job not found'
+      });
+    }
+
+    const job = rows[0];
+    let aiExp = null;
+    if (job.result && job.result.ai_explanation) {
+      aiExp = job.result.ai_explanation;
+    } else if (job.report_id) {
+      const repRows = await sql`SELECT ai_explanation FROM medical_reports WHERE id = ${job.report_id} LIMIT 1;`;
+      if (repRows.length > 0) {
+        aiExp = repRows[0].ai_explanation;
+      }
+    }
+
+    const testExplanations = Array.isArray(aiExp?.test_evaluations)
+      ? aiExp.test_evaluations.map((t) => ({
+          testName: t.test_name,
+          purpose: t.purpose,
+          whatItMeasures: t.what_it_measures,
+          interpretation: t.interpretation,
+          status: t.status
+        }))
+      : [];
+
+    return res.json({
+      success: true,
+      data: {
+        analysisId: job.id,
+        reportId: job.report_id,
+        status: (job.status || 'completed').toLowerCase(),
+        friendlyExplanation: {
+          summary: aiExp?.overall_summary || aiExp?.summary || 'Diagnostic report analysis complete.',
+          testExplanations,
+          precautions: aiExp?.precautions || [],
+          doctorFollowUpQuestions: aiExp?.doctor_discussion_questions || aiExp?.questionsForDoctor || [],
+          recommendedNextSteps: aiExp?.recommendations || []
+        }
+      }
+    });
+  } catch (err) {
+    console.error('friendly-explanation error:', err);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'FRIENDLY_EXPLANATION_FAILED', message: err.message, retryable: true },
+      detail: err.message
+    });
   }
 });
 
@@ -2562,6 +2975,14 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
       report_id: reportId,
       id: reportId,
       message: 'Medical report successfully uploaded and archived.',
+      data: {
+        reportId: reportId,
+        fileName: finalFileName,
+        fileType: finalFileType,
+        fileSize: finalFileSize,
+        status: 'uploaded',
+        createdAt: new Date().toISOString()
+      },
       report: {
         id: reportId,
         user_id: validUserId,
@@ -2589,7 +3010,15 @@ app.post(['/reports/upload', '/api/reports/upload'], conditionalMulter, async (r
     });
   } catch (err) {
     console.error('Report upload failed:', err);
-    return res.status(500).json({ detail: `Report upload failed: ${err.message}` });
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'REPORT_PROCESSING_FAILED',
+        message: `Report upload failed: ${err.message}`,
+        retryable: true
+      },
+      detail: `Report upload failed: ${err.message}`
+    });
   }
 });
 

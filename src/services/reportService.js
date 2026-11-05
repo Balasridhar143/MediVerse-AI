@@ -221,7 +221,7 @@ export const reportService = {
    * POST /api/reports/analyze
    * Full clinical RAG analysis pipeline with optional Indian language selection
    */
-  async analyzeReport({ file, fileData, fileName, fileType, patientName, reportName, reportType, hospital, doctor, rawText, language = 'en' }) {
+  async analyzeReport({ reportId, file, fileData, fileName, fileType, patientName, reportName, reportType, hospital, doctor, rawText, language = 'en' }) {
     let payload = {
       patient_name: patientName,
       report_name: reportName,
@@ -231,6 +231,11 @@ export const reportService = {
       raw_text: rawText || '',
       language: language || 'en'
     };
+
+    if (reportId) {
+      payload.reportId = reportId;
+      payload.report_id = reportId;
+    }
 
     if (file) {
       payload.file_name = file.name;
@@ -256,10 +261,43 @@ export const reportService = {
     });
     return {
       success: true,
-      reportId: res.data.report_id,
+      reportId: res.data.report_id || res.data.id || res.data.data?.reportId,
+      data: res.data.data,
       report: normalizeDbReport(res.data.report),
       ragAnalysis: res.data.rag_analysis
     };
+  },
+
+  /**
+   * POST /api/reports/start-analysis (Phase 4.2)
+   */
+  async startAnalysis(reportId, language = 'en') {
+    const res = await api.post('/reports/start-analysis', { reportId, language });
+    return res.data;
+  },
+
+  /**
+   * GET /api/reports/analysis/:analysisId/status (Phase 4.3)
+   */
+  async getAnalysisStatus(analysisId) {
+    const res = await api.get(`/reports/analysis/${analysisId}/status`);
+    return res.data;
+  },
+
+  /**
+   * GET /api/reports/analysis/:analysisId/extracted-data (Phase 4.4)
+   */
+  async getExtractedData(analysisId) {
+    const res = await api.get(`/reports/analysis/${analysisId}/extracted-data`);
+    return res.data;
+  },
+
+  /**
+   * GET /api/reports/analysis/:analysisId/friendly-explanation (Phase 4.5)
+   */
+  async getFriendlyExplanation(analysisId) {
+    const res = await api.get(`/reports/analysis/${analysisId}/friendly-explanation`);
+    return res.data;
   },
 
   /**

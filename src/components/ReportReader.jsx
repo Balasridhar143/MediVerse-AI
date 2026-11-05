@@ -65,6 +65,23 @@ export default function ReportReader({
 
   React.useEffect(() => {
     setCurrentReport(report);
+    let isMounted = true;
+    if (report?.id && !report?.fileData) {
+      reportService.getReportById(report.id)
+        .then((fullRep) => {
+          if (isMounted && fullRep && fullRep.fileData) {
+            setCurrentReport((prev) => ({
+              ...(prev || report),
+              ...fullRep,
+              fileData: fullRep.fileData
+            }));
+          }
+        })
+        .catch((e) => console.warn('Full report load notice:', e.message));
+    }
+    return () => {
+      isMounted = false;
+    };
   }, [report]);
 
   React.useEffect(() => {
@@ -295,8 +312,8 @@ export default function ReportReader({
         {/* SCROLLABLE REPORT BODY */}
         {/* ==================================================== */}
         <div className="p-5 overflow-y-auto space-y-6 text-xs">
-          {/* Document File / Image Preview & Download Banner */}
-          {activeReport.fileData && (
+          {/* Document File / Image / PDF Preview & Download Banner */}
+          {(activeReport.fileData || activeReport.hasFile || activeReport.id) && (
             <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between flex-wrap gap-2">
                 <div className="flex items-center gap-2">
@@ -315,10 +332,21 @@ export default function ReportReader({
                 </button>
               </div>
 
-              {/* If image data is present, show preview */}
-              {(activeReport.fileData.startsWith('data:image') || activeReport.fileType?.includes('image')) && (
-                <div className="mt-2 p-2 bg-white rounded-lg border border-slate-200 flex justify-center max-h-64 overflow-auto">
-                  <img src={activeReport.fileData} alt={activeReport.reportName} className="max-h-56 object-contain rounded" />
+              {/* If image data is present, show image preview */}
+              {activeReport.fileData && (activeReport.fileData.startsWith('data:image') || activeReport.fileType?.includes('image')) && (
+                <div className="mt-2 p-2 bg-white rounded-lg border border-slate-200 flex justify-center max-h-72 overflow-auto">
+                  <img src={activeReport.fileData} alt={activeReport.reportName} className="max-h-64 object-contain rounded" />
+                </div>
+              )}
+
+              {/* If PDF data is present, show embedded document preview */}
+              {activeReport.fileData && (activeReport.fileData.startsWith('data:application/pdf') || activeReport.fileType?.includes('pdf') || activeReport.fileName?.toLowerCase().endsWith('.pdf')) && (
+                <div className="mt-2 p-1 bg-white rounded-lg border border-slate-200 overflow-hidden">
+                  <iframe
+                    src={activeReport.fileData}
+                    title="PDF Document Preview"
+                    className="w-full h-80 rounded border-0"
+                  />
                 </div>
               )}
             </div>

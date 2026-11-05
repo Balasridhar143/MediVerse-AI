@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import {
   FileCheck2,
   Calendar,
@@ -115,7 +116,7 @@ export default function ReportCard({
         </div>
       </div>
 
-      {/* Primary Actions: [Download], [Open Report], [Understand Report] */}
+      {/* Primary Actions: [Download], [Open Report], [AI Analyze], [Understand Report] */}
       <div className="pt-3.5 mt-3.5 border-t border-slate-100 flex items-center justify-end gap-2 flex-wrap">
         <Button
           variant="outline"
@@ -136,6 +137,18 @@ export default function ReportCard({
         >
           Open Report
         </Button>
+
+        <Link to={`/patient/report-analyzer?reportId=${report.id}`}>
+          <Button
+            variant="outline"
+            size="sm"
+            icon={Sparkles}
+            className="text-teal-800 bg-teal-50 border-teal-200 hover:bg-teal-100 text-xs font-bold"
+            title="Launch comprehensive AI Report Analyzer on this report"
+          >
+            AI Analyze
+          </Button>
+        </Link>
 
         <Button
           variant="primary"
